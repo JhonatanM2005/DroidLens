@@ -2,6 +2,9 @@
 
 > Convierte tu celular Android en una webcam de alta definición para Windows por cable USB con latencia ultra baja (< 50 ms), sin necesidad de OBS Studio ni software pesado de terceros.
 
+[![Descargar APK](https://img.shields.io/badge/Descargar%20APK-v1.0.0-orange?style=for-the-badge&logo=android)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens.apk)
+[![GitHub Release](https://img.shields.io/github/v/release/JhonatanM2005/DroidLens?style=for-the-badge)](https://github.com/JhonatanM2005/DroidLens/releases)
+
 ---
 
 ## ✨ Características
