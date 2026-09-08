@@ -4,6 +4,9 @@ import android.content.Context
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.*
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -49,24 +52,32 @@ class CameraManager(
             .requireLensFacing(lensFacing)
             .build()
 
-        // 1. Caso de uso: Preview en pantalla
+        // Forzar estrictamente relación de aspecto 16:9 en hardware y resolución objetivo
+        val resolutionSelector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(targetResolution, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+            )
+            .build()
+
+        // 1. Caso de uso: Preview en pantalla en 16:9
         val preview = Preview.Builder()
-            .setTargetResolution(targetResolution)
+            .setResolutionSelector(resolutionSelector)
             .build()
             .also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
 
-        // 2. Caso de uso: Análisis de imagen para streaming
+        // 2. Caso de uso: Análisis de imagen y captura en 16:9
         val imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(targetResolution)
+            .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
                     try {
-                        val jpeg = ImageConverter.imageProxyToJpeg(imageProxy, quality = 80)
+                        // Calidad 65: óptima para 30+ FPS continuos, reduce peso a ~50KB por frame
+                        val jpeg = ImageConverter.imageProxyToJpeg(imageProxy, quality = 65)
                         if (jpeg != null) {
                             frameListener?.onFrameCaptured(jpeg)
                         }

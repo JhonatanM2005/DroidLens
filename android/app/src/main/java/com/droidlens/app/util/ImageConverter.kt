@@ -11,10 +11,10 @@ object ImageConverter {
      * de CameraX (toBitmap) y la compresión nativa optimizada del sistema Android.
      * Pasa de ~180 ms por frame en bucles manuales a tan solo ~4-8 ms.
      */
-    fun imageProxyToJpeg(image: ImageProxy, quality: Int = 75): ByteArray? {
+    fun imageProxyToJpeg(image: ImageProxy, quality: Int = 65): ByteArray? {
         return try {
             val bitmap = image.toBitmap()
-            val outStream = ByteArrayOutputStream(64 * 1024)
+            val outStream = ByteArrayOutputStream(48 * 1024)
             val success = bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outStream)
             if (success) {
                 outStream.toByteArray()

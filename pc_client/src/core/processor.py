@@ -44,10 +44,28 @@ class FrameProcessor:
         elif self.flip_horizontal and self.flip_vertical:
             frame = cv2.flip(frame, -1)
 
-        # 3. Ajuste de dimensiones a la cámara virtual si difiere
+        # 3. Ajuste estricto a 16:9 sin deformar la imagen
         h, w = frame.shape[:2]
-        if w != self.target_width or h != self.target_height:
-            frame = cv2.resize(frame, (self.target_width, self.target_height), interpolation=cv2.INTER_LINEAR)
+        target_w, target_h = self.target_width, self.target_height
+        current_aspect = w / h
+        target_aspect = target_w / target_h
+
+        if abs(current_aspect - target_aspect) < 0.02:
+            # Misma relación 16:9: escalado directo
+            if w != target_w or h != target_h:
+                frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            # Proporción distinta (ej. teléfono en vertical): escalar preservando proporción y centrar en canvas 16:9
+            scale = min(target_w / w, target_h / h)
+            nw, nh = int(w * scale), int(h * scale)
+            resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+            canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+            canvas[:] = (18, 16, 14)  # Fondo oscuro elegante
+            x_offset = (target_w - nw) // 2
+            y_offset = (target_h - nh) // 2
+            canvas[y_offset:y_offset + nh, x_offset:x_offset + nw] = resized
+            frame = canvas
 
         return frame
 
