@@ -33,10 +33,10 @@ a = Analysis(
         'pyvirtualcam',
         'cv2'
     ],
-    hookspath=[os.path.join(SPECPATH, "hooks")],
+    hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['pytest', 'unittest'],
+    excludes=['pytest', 'unittest', 'usb'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

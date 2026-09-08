@@ -4,7 +4,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
-from usb.adb_manager import ADBManager
+from adb.adb_manager import ADBManager
 
 SAMPLE_DEVICES_OUTPUT = """List of devices attached
 8118e8de0410           device product:pixelage_lancelot model:Redmi_9 device:lancelot transport_id:2

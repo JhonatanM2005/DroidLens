@@ -19,13 +19,13 @@ try:
     from core.receiver import StreamReceiver, FrameStatus
     from core.processor import FrameProcessor
     from core.virtual_camera import VirtualCameraManager
-    from usb.adb_manager import ADBManager
+    from adb.adb_manager import ADBManager
     from utils.paths import get_settings_file, get_captures_dir, find_adb_binary
 except ImportError:
     from ..core.receiver import StreamReceiver, FrameStatus
     from ..core.processor import FrameProcessor
     from ..core.virtual_camera import VirtualCameraManager
-    from ..usb.adb_manager import ADBManager
+    from ..adb.adb_manager import ADBManager
     from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary
 
 ctk.set_appearance_mode("Dark")
