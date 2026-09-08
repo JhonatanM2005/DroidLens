@@ -3,6 +3,8 @@
 > Convierte tu celular Android en una webcam de alta definición para Windows por cable USB con latencia ultra baja (15 a 35 ms típica), sin necesidad de OBS Studio ni software pesado de terceros.
 
 [![Descargar APK](https://img.shields.io/badge/Descargar%20APK-v1.0.0-orange?style=for-the-badge&logo=android)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens.apk)
+[![Instalador Windows](https://img.shields.io/badge/Instalador%20Windows-v1.0.0-blue?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Setup-v1.0.0.exe)
+[![Portable Windows](https://img.shields.io/badge/Portable%20Windows-v1.0.0-lightgrey?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Windows-Portable-v1.0.0.zip)
 [![GitHub Release](https://img.shields.io/github/v/release/JhonatanM2005/DroidLens?style=for-the-badge)](https://github.com/JhonatanM2005/DroidLens/releases)
 [![CI Build](https://github.com/JhonatanM2005/DroidLens/actions/workflows/ci.yml/badge.svg)](https://github.com/JhonatanM2005/DroidLens/actions/workflows/ci.yml)
 
@@ -137,13 +139,13 @@ La comunicación entre el celular y la PC utiliza un socket TCP sobre el túnel 
 
 ## 📦 Distribución e Instalación en Windows
 
-DroidLens ofrece dos opciones de distribución para Windows:
+DroidLens ofrece dos opciones de distribución oficiales para Windows (descargables desde [GitHub Releases](https://github.com/JhonatanM2005/DroidLens/releases)):
 
-1. **Instalador Wizard (`DroidLens-Setup.exe`):**
+1. **Instalador Wizard ([`DroidLens-Setup-v1.0.0.exe`](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Setup-v1.0.0.exe)):**
    - Instalación per-user sin requerir permisos de administrador para la app.
    - Opción durante la instalación para registrar el driver DirectShow con elevación UAC.
    - Crea accesos directos en el Menú Inicio y Escritorio con desinstalador limpio.
-2. **Ejecutable Portable (`DroidLens-Windows-Portable-v1.0.0.zip`):**
+2. **Ejecutable Portable ([`DroidLens-Windows-Portable-v1.0.0.zip`](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Windows-Portable-v1.0.0.zip)):**
    - No requiere instalación: descomprimir y ejecutar `DroidLens.exe`.
 
 ---
