@@ -14,70 +14,120 @@ import androidx.lifecycle.LifecycleOwner
 import com.droidlens.app.util.ImageConverter
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+enum class VideoProfile(
+    val title: String,
+    val width: Int,
+    val height: Int,
+    val targetFps: Int,
+    val jpegQuality: Int
+) {
+    LOW_POWER("480p Ahorro", 854, 480, 24, 50),
+    HD_720P("720p HD", 1280, 720, 30, 65),
+    FULL_HD_1080P("1080p FHD", 1920, 1080, 30, 75)
+}
 
 class CameraManager(
     private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    private val previewView: PreviewView
+    private val lifecycleOwner: LifecycleOwner
 ) {
 
     interface FrameListener {
         fun onFrameCaptured(jpegBytes: ByteArray)
     }
 
+    interface CameraErrorListener {
+        fun onCameraError(message: String, throwable: Throwable?)
+    }
+
     var frameListener: FrameListener? = null
+    var errorListener: CameraErrorListener? = null
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
+    private var preview: Preview? = null
+    private var imageAnalysis: ImageAnalysis? = null
+    private var currentPreviewView: PreviewView? = null
+
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     private var lensFacing: Int = CameraSelector.LENS_FACING_BACK
-    private var targetResolution: Size = Size(1280, 720)
+    var currentProfile: VideoProfile = VideoProfile.HD_720P
+        private set
+
     private var isTorchEnabled: Boolean = false
 
-    fun startCamera(onReady: (() -> Unit)? = null) {
+    // Estado único y seguro para hilos del streaming
+    val isStreamingActive = AtomicBoolean(false)
+
+    fun startCamera(onResult: ((Boolean) -> Unit)? = null) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
-            cameraProvider = cameraProviderFuture.get()
-            bindCameraUseCases()
-            onReady?.invoke()
+            try {
+                cameraProvider = cameraProviderFuture.get()
+                val success = bindCameraUseCases()
+                onResult?.invoke(success)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error obteniendo ProcessCameraProvider: ${e.message}", e)
+                errorListener?.onCameraError("No se pudo iniciar el proveedor de cámara: ${e.message}", e)
+                onResult?.invoke(false)
+            }
         }, ContextCompat.getMainExecutor(context))
     }
 
-    private fun bindCameraUseCases() {
-        val provider = cameraProvider ?: return
+    fun attachPreview(previewView: PreviewView) {
+        currentPreviewView = previewView
+        preview?.setSurfaceProvider(previewView.surfaceProvider)
+    }
+
+    fun detachPreview() {
+        currentPreviewView = null
+        preview?.setSurfaceProvider(null)
+    }
+
+    fun bindCameraUseCases(): Boolean {
+        val provider = cameraProvider ?: return false
         provider.unbindAll()
 
         val cameraSelector = CameraSelector.Builder()
             .requireLensFacing(lensFacing)
             .build()
 
-        // Forzar estrictamente relación de aspecto 16:9 en hardware y resolución objetivo
+        val targetSize = Size(currentProfile.width, currentProfile.height)
+
         val resolutionSelector = ResolutionSelector.Builder()
             .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
             .setResolutionStrategy(
-                ResolutionStrategy(targetResolution, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                ResolutionStrategy(targetSize, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
             )
             .build()
 
         // 1. Caso de uso: Preview en pantalla en 16:9
-        val preview = Preview.Builder()
+        preview = Preview.Builder()
             .setResolutionSelector(resolutionSelector)
             .build()
-            .also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
+            .also { p ->
+                currentPreviewView?.let { pv ->
+                    p.setSurfaceProvider(pv.surfaceProvider)
+                }
             }
 
         // 2. Caso de uso: Análisis de imagen y captura en 16:9
-        val imageAnalysis = ImageAnalysis.Builder()
+        imageAnalysis = ImageAnalysis.Builder()
             .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
             .also {
                 it.setAnalyzer(cameraExecutor) { imageProxy ->
                     try {
-                        // Calidad 65: óptima para 30+ FPS continuos, reduce peso a ~50KB por frame
-                        val jpeg = ImageConverter.imageProxyToJpeg(imageProxy, quality = 65)
+                        // Pausa de conversión de imagen si no se está transmitiendo
+                        if (!isStreamingActive.get()) {
+                            return@setAnalyzer
+                        }
+
+                        val jpeg = ImageConverter.imageProxyToJpeg(imageProxy, quality = currentProfile.jpegQuality)
                         if (jpeg != null) {
                             frameListener?.onFrameCaptured(jpeg)
                         }
@@ -89,23 +139,36 @@ class CameraManager(
                 }
             }
 
-        try {
+        return try {
+            val useCases = mutableListOf<UseCase>(imageAnalysis!!)
+            preview?.let { useCases.add(it) }
+
             camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                preview,
-                imageAnalysis
+                *useCases.toTypedArray()
             )
-            // Restaurar estado de linterna si aplica
-            if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+
+            // Restaurar estado de linterna si el hardware lo soporta
+            if (lensFacing == CameraSelector.LENS_FACING_BACK && hasFlashUnit()) {
                 camera?.cameraControl?.enableTorch(isTorchEnabled)
+            } else {
+                isTorchEnabled = false
             }
+            true
         } catch (exc: Exception) {
             Log.e(TAG, "Fallo al enlazar casos de uso de CameraX: ${exc.message}", exc)
+            camera = null
+            errorListener?.onCameraError("Cámara no disponible o en uso por otra aplicación: ${exc.message}", exc)
+            false
         }
     }
 
-    fun switchCamera() {
+    fun hasFlashUnit(): Boolean {
+        return camera?.cameraInfo?.hasFlashUnit() == true
+    }
+
+    fun switchCamera(): Int {
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
@@ -113,25 +176,60 @@ class CameraManager(
         }
         isTorchEnabled = false
         bindCameraUseCases()
+        return lensFacing
     }
 
+    fun getLensFacing(): Int = lensFacing
+
     fun toggleTorch(): Boolean {
-        if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-            return false // Cámaras frontales no suelen tener flash físico
+        if (!hasFlashUnit()) {
+            isTorchEnabled = false
+            return false
         }
         isTorchEnabled = !isTorchEnabled
-        camera?.cameraControl?.enableTorch(isTorchEnabled)
+        try {
+            camera?.cameraControl?.enableTorch(isTorchEnabled)
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo cambiar estado de linterna: ${e.message}")
+            isTorchEnabled = false
+        }
         return isTorchEnabled
     }
 
-    fun setResolution(width: Int, height: Int) {
-        targetResolution = Size(width, height)
-        bindCameraUseCases()
+    fun setProfile(profile: VideoProfile): Boolean {
+        if (currentProfile == profile) return true
+        currentProfile = profile
+        return bindCameraUseCases()
+    }
+
+    fun setLinearZoom(zoom: Float) {
+        try {
+            camera?.cameraControl?.setLinearZoom(zoom.coerceIn(0f, 1f))
+        } catch (e: Exception) {
+            Log.w(TAG, "Error aplicando zoom lineal: ${e.message}")
+        }
+    }
+
+    fun focusOnPoint(x: Float, y: Float) {
+        val pv = currentPreviewView ?: return
+        val factory = pv.meteringPointFactory
+        val point = factory.createPoint(x, y)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(3, TimeUnit.SECONDS)
+            .build()
+        try {
+            camera?.cameraControl?.startFocusAndMetering(action)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error aplicando autoenfoque: ${e.message}")
+        }
     }
 
     fun stop() {
         cameraProvider?.unbindAll()
         cameraExecutor.shutdown()
+        camera = null
+        preview = null
+        imageAnalysis = null
     }
 
     companion object {

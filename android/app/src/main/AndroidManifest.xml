@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -17,12 +20,13 @@
         android:required="false" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_camera"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_camera"
         android:supportsRtl="true"
         android:theme="@style/Theme.DroidLens">
+
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout"
@@ -32,6 +36,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.CamStreamService"
+            android:foregroundServiceType="camera"
+            android:exported="false" />
+
     </application>
 
 </manifest>

@@ -1,35 +1,122 @@
 package com.droidlens.app
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.droidlens.app.camera.CameraManager
+import com.droidlens.app.camera.VideoProfile
 import com.droidlens.app.databinding.ActivityMainBinding
-import com.droidlens.app.network.StreamServer
+import com.droidlens.app.service.CamStreamService
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var cameraManager: CameraManager
-    private lateinit var streamServer: StreamServer
+    private lateinit var prefs: SharedPreferences
+    private lateinit var scaleGestureDetector: ScaleGestureDetector
 
-    private var isStreaming = false
-    private var is720p = true
+    private var streamService: CamStreamService? = null
+    private var isBound = false
     private var isDarkModeActive = false
 
-    private val requestPermissionLauncher = registerForActivityResult(
+    private val requestCameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            initCamera()
+            bindStreamService()
         } else {
             Toast.makeText(this, R.string.camera_permission_required, Toast.LENGTH_LONG).show()
+            binding.tvStatus.text = "Permiso de cámara denegado"
+            binding.tvStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+        }
+    }
+
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val localBinder = binder as? CamStreamService.StreamBinder
+            streamService = localBinder?.getService()
+            isBound = true
+
+            streamService?.let { service ->
+                // Acoplar vista previa
+                service.cameraManager.attachPreview(binding.previewView)
+
+                // Restaurar perfil guardado si aplica
+                val savedProfileName = prefs.getString(KEY_VIDEO_PROFILE, VideoProfile.HD_720P.name)
+                val initialProfile = try {
+                    VideoProfile.valueOf(savedProfileName ?: VideoProfile.HD_720P.name)
+                } catch (e: Exception) {
+                    VideoProfile.HD_720P
+                }
+                service.cameraManager.setProfile(initialProfile)
+                binding.btnResolution.text = initialProfile.title
+
+                // Vincular callbacks de estado
+                service.onStatusChanged = { streaming, _ ->
+                    runOnUiThread {
+                        updateStreamingUI(streaming)
+                    }
+                }
+
+                service.onFpsUpdated = { fps ->
+                    runOnUiThread {
+                        binding.tvFps.text = String.format("%.1f FPS", fps)
+                    }
+                }
+
+                service.onClientStateChanged = { connected, _ ->
+                    runOnUiThread {
+                        if (connected) {
+                            binding.tvStatus.text = "PC Conectada"
+                            binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                        } else {
+                            binding.tvStatus.text = "Esperando USB :8080"
+                            binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.secondary))
+                        }
+                    }
+                }
+
+                service.cameraManager.errorListener = object : com.droidlens.app.camera.CameraManager.CameraErrorListener {
+                    override fun onCameraError(message: String, throwable: Throwable?) {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                            binding.tvStatus.text = "Error de cámara"
+                            binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
+                        }
+                    }
+                }
+
+                updateStreamingUI(service.isStreaming.get())
+                updateFlashButtonState()
+
+                // Si no estaba transmitiendo, iniciar sesión automáticamente
+                if (!service.isStreaming.get()) {
+                    service.startStreamingSession()
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            streamService = null
+            isBound = false
         }
     }
 
@@ -38,92 +125,77 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Mantener la pantalla encendida durante videollamadas
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        initServer()
         setupUI()
 
-        if (allPermissionsGranted()) {
-            initCamera()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        if (hasCameraPermission()) {
+            bindStreamService()
         } else {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+            requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
-    private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
+    private fun hasCameraPermission() = ContextCompat.checkSelfPermission(
         this, Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
 
-    private fun initCamera() {
-        cameraManager = CameraManager(this, this, binding.previewView)
-        cameraManager.frameListener = object : CameraManager.FrameListener {
-            override fun onFrameCaptured(jpegBytes: ByteArray) {
-                if (isStreaming) {
-                    streamServer.sendFrame(jpegBytes)
-                }
-            }
+    private fun bindStreamService() {
+        val intent = Intent(this, CamStreamService::class.java)
+        // Iniciar servicio explícitamente para que persista fuera del ciclo de vida de la actividad
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
-        cameraManager.startCamera {
-            // Iniciar streaming automáticamente al arrancar
-            startStreaming()
-        }
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
-    private fun initServer() {
-        streamServer = StreamServer(port = 8080)
-        streamServer.callback = object : StreamServer.ServerCallback {
-            override fun onClientConnected(clientAddress: String) {
-                binding.tvStatus.text = "PC Conectada"
-                binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
-            }
-
-            override fun onClientDisconnected() {
-                binding.tvStatus.text = "Esperando USB :8080"
-                binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.secondary))
-            }
-
-            override fun onFpsUpdated(fps: Float) {
-                binding.tvFps.text = String.format("%.1f FPS", fps)
-            }
-
-            override fun onError(message: String) {
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
-            }
-        }
-        streamServer.start()
-    }
-
+    @SuppressLint("ClickableViewAccessibility")
     private fun setupUI() {
         binding.btnToggleStream.setOnClickListener {
-            if (isStreaming) {
-                stopStreaming()
+            val service = streamService ?: return@setOnClickListener
+            if (service.isStreaming.get()) {
+                service.stopStreamingSession()
             } else {
-                startStreaming()
+                service.startStreamingSession()
             }
         }
 
         binding.btnSwitchCamera.setOnClickListener {
-            cameraManager.switchCamera()
+            val service = streamService ?: return@setOnClickListener
+            service.cameraManager.switchCamera()
+            updateFlashButtonState()
         }
 
         binding.btnFlash.setOnClickListener {
-            val enabled = cameraManager.toggleTorch()
+            val service = streamService ?: return@setOnClickListener
+            val enabled = service.cameraManager.toggleTorch()
             binding.btnFlash.text = if (enabled) "Flash ON" else "Flash"
         }
 
         binding.btnResolution.setOnClickListener {
-            is720p = !is720p
-            if (is720p) {
-                cameraManager.setResolution(1280, 720)
-                binding.btnResolution.text = "720p"
-            } else {
-                cameraManager.setResolution(1920, 1080)
-                binding.btnResolution.text = "1080p"
+            val service = streamService ?: return@setOnClickListener
+            val nextProfile = when (service.cameraManager.currentProfile) {
+                VideoProfile.HD_720P -> VideoProfile.FULL_HD_1080P
+                VideoProfile.FULL_HD_1080P -> VideoProfile.LOW_POWER
+                VideoProfile.LOW_POWER -> VideoProfile.HD_720P
             }
+            service.cameraManager.setProfile(nextProfile)
+            binding.btnResolution.text = nextProfile.title
+            prefs.edit().putString(KEY_VIDEO_PROFILE, nextProfile.name).apply()
+            Toast.makeText(this, "Perfil móvil: ${nextProfile.title}", Toast.LENGTH_SHORT).show()
         }
 
-        // Modo pantalla apagada para evitar calentamiento de pantalla en llamadas largas
         binding.btnDarkMode.setOnClickListener {
             enableDarkMode(true)
         }
@@ -131,36 +203,71 @@ class MainActivity : AppCompatActivity() {
         binding.blackoutOverlay.setOnClickListener {
             enableDarkMode(false)
         }
+
+        scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            private var currentZoom = 0f
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val service = streamService ?: return true
+                currentZoom += (detector.scaleFactor - 1.0f) * 0.5f
+                currentZoom = currentZoom.coerceIn(0f, 1f)
+                service.cameraManager.setLinearZoom(currentZoom)
+                return true
+            }
+        })
+
+        binding.previewView.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
+            if (!scaleGestureDetector.isInProgress && event.action == MotionEvent.ACTION_UP) {
+                streamService?.cameraManager?.focusOnPoint(event.x, event.y)
+            }
+            true
+        }
+    }
+
+    private fun updateStreamingUI(isStreaming: Boolean) {
+        if (isStreaming) {
+            binding.btnToggleStream.text = getString(R.string.stop_streaming)
+            binding.btnToggleStream.setBackgroundColor(ContextCompat.getColor(this, R.color.status_red))
+        } else {
+            binding.btnToggleStream.text = getString(R.string.start_streaming)
+            binding.btnToggleStream.setBackgroundColor(ContextCompat.getColor(this, R.color.primary))
+            binding.tvFps.text = "0.0 FPS"
+        }
+    }
+
+    private fun updateFlashButtonState() {
+        val service = streamService ?: return
+        val hasFlash = service.cameraManager.hasFlashUnit()
+        binding.btnFlash.isEnabled = hasFlash
+        binding.btnFlash.alpha = if (hasFlash) 1.0f else 0.4f
+        binding.btnFlash.text = "Flash"
     }
 
     private fun enableDarkMode(enable: Boolean) {
         isDarkModeActive = enable
         binding.blackoutOverlay.visibility = if (enable) View.VISIBLE else View.GONE
+        binding.bottomControls.visibility = if (enable) View.GONE else View.VISIBLE
+        binding.topBar.visibility = if (enable) View.GONE else View.VISIBLE
+
         val lp = window.attributes
         lp.screenBrightness = if (enable) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         window.attributes = lp
     }
 
-    private fun startStreaming() {
-        isStreaming = true
-        binding.btnToggleStream.text = getString(R.string.stop_streaming)
-        binding.btnToggleStream.setBackgroundColor(ContextCompat.getColor(this, R.color.status_red))
-    }
-
-    private fun stopStreaming() {
-        isStreaming = false
-        binding.btnToggleStream.text = getString(R.string.start_streaming)
-        binding.btnToggleStream.setBackgroundColor(ContextCompat.getColor(this, R.color.primary))
-        binding.tvFps.text = "0.0 FPS"
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        if (::cameraManager.isInitialized) {
-            cameraManager.stop()
+        if (isBound) {
+            streamService?.cameraManager?.detachPreview()
+            unbindService(serviceConnection)
+            isBound = false
         }
-        if (::streamServer.isInitialized) {
-            streamServer.stop()
-        }
+        // Nota crítica de Bloque 2: No se detiene el streamService aquí.
+        // La transmisión continúa en segundo plano con WakeLock hasta que
+        // el usuario pulse 'Detener' en la app o en la notificación persistente.
+    }
+
+    companion object {
+        private const val PREFS_NAME = "droidlens_prefs"
+        private const val KEY_VIDEO_PROFILE = "video_profile"
     }
 }

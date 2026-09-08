@@ -6,7 +6,7 @@ el dispositivo no está transmitiendo video.
 
 import math
 import time
-from typing import Tuple
+from typing import Tuple, Optional, Dict, Any
 import numpy as np
 import cv2
 
@@ -19,6 +19,7 @@ class FrameProcessor:
         self.rotation_degrees = 0  # 0, 90, 180, 270
         self.flip_horizontal = True  # Modo espejo (activo por defecto para webcams)
         self.flip_vertical = False
+        self.show_diagnostic_overlay = False
 
         self._standby_counter = 0
 
@@ -26,8 +27,8 @@ class FrameProcessor:
         self.target_width = width
         self.target_height = height
 
-    def process_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Aplica transformaciones de orientación y tamaño al fotograma."""
+    def process_frame(self, frame: np.ndarray, meta: Optional[Dict[str, Any]] = None) -> np.ndarray:
+        """Aplica transformaciones de orientación, tamaño y overlay al fotograma."""
         # 1. Rotación
         if self.rotation_degrees == 90:
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
@@ -55,7 +56,7 @@ class FrameProcessor:
             if w != target_w or h != target_h:
                 frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
         else:
-            # Proporción distinta (ej. teléfono en vertical): escalar preservando proporción y centrar en canvas 16:9
+            # Proporción distinta (ej. teléfono en vertical): preservar proporción y centrar en canvas 16:9
             scale = min(target_w / w, target_h / h)
             nw, nh = int(w * scale), int(h * scale)
             resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
@@ -66,6 +67,40 @@ class FrameProcessor:
             y_offset = (target_h - nh) // 2
             canvas[y_offset:y_offset + nh, x_offset:x_offset + nw] = resized
             frame = canvas
+
+        # 4. Overlay de diagnóstico opcional
+        if self.show_diagnostic_overlay and meta:
+            frame = self._draw_overlay(frame, meta)
+
+        return frame
+
+    def _draw_overlay(self, frame: np.ndarray, meta: Dict[str, Any]) -> np.ndarray:
+        """Dibuja un badge de diagnóstico semitransparente con métricas del fotograma."""
+        fh, fw = frame.shape[:2]
+        pad = 12
+        box_w = 260
+        box_h = 95
+        x1, y1 = pad, pad
+        x2, y2 = x1 + box_w, y1 + box_h
+
+        sub = frame[y1:y2, x1:x2]
+        black_rect = np.zeros_like(sub)
+        cv2.addWeighted(sub, 0.35, black_rect, 0.65, 0, sub)
+        frame[y1:y2, x1:x2] = sub
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 229, 255), 1)
+
+        fid = meta.get("frame_id", 0)
+        lat = meta.get("latency_ms", 0.0)
+        shape = meta.get("shape", (fh, fw))
+
+        cv2.putText(frame, "DIAGNOSTICO DROIDLENS", (x1 + 10, y1 + 22),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.45, (0, 229, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Resolucion: {shape[1]}x{shape[0]}", (x1 + 10, y1 + 42),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (240, 240, 240), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Frame ID: #{fid}", (x1 + 10, y1 + 62),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Latencia USB: {lat:.1f} ms", (x1 + 10, y1 + 82),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 150), 1, cv2.LINE_AA)
 
         return frame
 

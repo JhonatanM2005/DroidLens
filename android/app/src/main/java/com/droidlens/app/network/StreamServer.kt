@@ -11,7 +11,10 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-class StreamServer(private val port: Int = 8080) {
+class StreamServer(
+    val bindHost: String = "127.0.0.1",
+    val port: Int = 8080
+) {
 
     interface ServerCallback {
         fun onClientConnected(clientAddress: String)
@@ -27,16 +30,16 @@ class StreamServer(private val port: Int = 8080) {
     private var outputStream: OutputStream? = null
 
     private val isRunning = AtomicBoolean(false)
-    private val isClientConnected = AtomicBoolean(false)
+    val isClientConnected = AtomicBoolean(false)
 
-    // Canal CONFLATED: la estructura óptima para baja latencia (siempre conserva el frame más reciente y descarta los viejos en 0ns)
+    // Canal CONFLATED: conserva siempre el frame más reciente y descarta los antiguos en 0ns
     private val frameChannel = Channel<ByteArray>(Channel.CONFLATED)
 
     private var frameIdCounter = AtomicInteger(0)
     private var serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var senderJob: Job? = null
 
-    // Métricas de FPS
+    // Métricas de FPS de transmisión
     private var framesSentCount = 0
     private var lastFpsTimestamp = System.currentTimeMillis()
 
@@ -47,9 +50,9 @@ class StreamServer(private val port: Int = 8080) {
             try {
                 serverSocket = ServerSocket().apply {
                     reuseAddress = true
-                    bind(InetSocketAddress("0.0.0.0", port))
+                    bind(InetSocketAddress(bindHost, port))
                 }
-                Log.i(TAG, "Servidor de streaming iniciado en puerto $port")
+                Log.i(TAG, "Servidor de streaming iniciado en $bindHost:$port")
 
                 while (isRunning.get()) {
                     try {
@@ -82,7 +85,7 @@ class StreamServer(private val port: Int = 8080) {
             } catch (e: Exception) {
                 Log.e(TAG, "Error fatal iniciando ServerSocket: ${e.message}")
                 withContext(Dispatchers.Main) {
-                    callback?.onError("No se pudo iniciar el servidor en el puerto $port: ${e.message}")
+                    callback?.onError("No se pudo iniciar el servidor en $bindHost:$port: ${e.message}")
                 }
             }
         }
@@ -96,11 +99,16 @@ class StreamServer(private val port: Int = 8080) {
                     val jpegBytes = frameChannel.receive()
                     val frameId = frameIdCounter.incrementAndGet()
                     val timestamp = System.currentTimeMillis()
-                    val packet = PacketProtocol.packFrame(frameId, timestamp, jpegBytes)
+
+                    // Optimización de cero copias: enviar cabecera (20 bytes) y luego payload directamente
+                    val header = PacketProtocol.createHeader(frameId, timestamp, jpegBytes.size)
 
                     synchronized(this@StreamServer) {
-                        outputStream?.write(packet)
-                        outputStream?.flush()
+                        outputStream?.let { os ->
+                            os.write(header)
+                            os.write(jpegBytes)
+                            os.flush()
+                        }
                     }
 
                     // Cálculo de FPS

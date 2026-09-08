@@ -7,6 +7,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+captures/
+pc_client/captures/
+settings.json
+pc_client/settings.json
 
 # Android / Gradle
 android/.gradle/
