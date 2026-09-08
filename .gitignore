@@ -27,6 +27,7 @@ android/.cxx/
 
 # Binaries & packages
 *.apk
+!DroidLens.apk
 *.aab
 
 # OS files

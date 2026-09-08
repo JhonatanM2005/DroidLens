@@ -49,6 +49,7 @@
 
 ```text
 DroidLens/
+├── DroidLens.apk                # APK compilado listo para instalar en Android
 ├── dist/                        # Instaladores y binarios compilados listos para usar
 │   ├── DroidLens-Setup-v1.0.0.exe        # Instalador wizard para Windows (Inno Setup)
 │   ├── DroidLens-Windows-Portable-v1.0.0.zip # Versión portable sin instalación
@@ -79,7 +80,7 @@ DroidLens/
 │   └── src/
 │       ├── core/                # Receptor LIFO reactivo, protocolo y cámara virtual
 │       ├── ui/                  # Interfaz gráfica moderna (CustomTkinter)
-│       ├── usb/                 # Gestor multi-dispositivo y forward con serial
+│       ├── adb/                 # Gestor multi-dispositivo y forward con serial
 │       └── utils/               # Gestor de rutas portables (paths.py)
 │
 ├── android/                     # Aplicación móvil nativa en Kotlin (CameraX)
