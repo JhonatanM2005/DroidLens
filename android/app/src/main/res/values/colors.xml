@@ -1,0 +1,11 @@
+<resources>
+    <color name="primary">#FF8C00</color>
+    <color name="primary_variant">#E07B00</color>
+    <color name="secondary">#00E5FF</color>
+    <color name="background">#121212</color>
+    <color name="surface">#1E1E1E</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="on_background">#E0E0E0</color>
+    <color name="status_green">#00E676</color>
+    <color name="status_red">#FF5252</color>
+</resources>

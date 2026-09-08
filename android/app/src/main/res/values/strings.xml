@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">DroidLens</string>
+    <string name="start_streaming">Iniciar Transmisión</string>
+    <string name="stop_streaming">Detener Transmisión</string>
+    <string name="switch_camera">Cambiar Cámara</string>
+    <string name="toggle_torch">Flash / Linterna</string>
+    <string name="dark_mode">Modo Ahorro / Pantalla Off</string>
+    <string name="res_720p">720p HD</string>
+    <string name="res_1080p">1080p Full HD</string>
+    <string name="status_ready">Listo para conectar por USB</string>
+    <string name="status_streaming">Transmitiendo por USB en puerto 8080</string>
+    <string name="camera_permission_required">Se requiere permiso de cámara para usar el teléfono como webcam.</string>
+</resources>
