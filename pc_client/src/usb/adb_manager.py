@@ -130,6 +130,13 @@ class ADBManager:
         code, _, _ = self._run_command(["forward", "--remove", f"tcp:{local_port}"])
         return code == 0
 
+    def restart_server(self) -> bool:
+        """Reinicia el demonio local de ADB para forzar un reescaneo de todos los buses USB."""
+        logger.info("Reiniciando demonio ADB...")
+        self._run_command(["kill-server"], timeout=3.0)
+        code, _, _ = self._run_command(["start-server"], timeout=5.0)
+        return code == 0
+
     def get_forward_list(self) -> List[str]:
         """Consulta todas las reglas de reenvio activas."""
         code, out, _ = self._run_command(["forward", "--list"])

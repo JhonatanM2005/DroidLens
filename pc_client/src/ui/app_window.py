@@ -223,6 +223,8 @@ class DroidLensApp(ctk.CTk):
         self.processor.flip_horizontal = self.mirror_switch.get()
 
     def _reconnect_usb(self):
+        self.adb_manager.restart_server()
+        time.sleep(0.5)
         self.adb_manager.setup_port_forward(8080, 8080)
 
     def _usb_monitor_loop(self):
