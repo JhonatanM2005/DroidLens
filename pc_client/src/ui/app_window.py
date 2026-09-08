@@ -7,7 +7,6 @@ activar la cámara virtual y monitorear el estado de la conexión USB.
 
 import threading
 import time
-import tkinter as tk
 from typing import Optional
 import customtkinter as ctk
 import cv2
@@ -43,17 +42,21 @@ class DroidLensApp(ctk.CTk):
 
         self.is_running = True
         self.is_vcam_enabled = False
+        self._latest_display_frame = None
 
         # Configurar diseño de interfaz
         self._create_ui()
 
-        # Iniciar hilos de trabajo
+        # Iniciar receptor y bucles
         self.receiver.start()
-        self._video_thread = threading.Thread(target=self._video_loop, daemon=True)
+        self._video_thread = threading.Thread(target=self._video_loop, daemon=True, name="VirtualCamVideoThread")
         self._video_thread.start()
 
-        self._usb_monitor_thread = threading.Thread(target=self._usb_monitor_loop, daemon=True)
+        self._usb_monitor_thread = threading.Thread(target=self._usb_monitor_loop, daemon=True, name="UsbMonitorThread")
         self._usb_monitor_thread.start()
+
+        # Iniciar refresco del preview en el hilo principal de la GUI
+        self.after(30, self._ui_refresh_tick)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -257,65 +260,62 @@ class DroidLensApp(ctk.CTk):
             self.device_info_label.configure(text="Desconectado\nEnchufa el celular por USB con Depuración activa.", text_color="#AAAAAA")
 
     def _video_loop(self):
-        """Bucle continuo de adquisición, procesamiento y renderizado de video."""
+        """Bucle de alta velocidad en hilo dedicado para alimentar la cámara virtual sin bloqueos."""
         target_fps = 30
         frame_interval = 1.0 / target_fps
 
         while self.is_running:
             loop_start = time.time()
-            frame, meta = self.receiver.get_latest_frame(timeout=0.03)
+            frame, meta = self.receiver.get_latest_frame(timeout=0.033)
 
             if frame is not None:
-                # Procesar fotograma real recibido
                 processed = self.processor.process_frame(frame)
             else:
-                # Mostrar pantalla de standby
                 msg = "Esperando stream del celular..." if self.receiver.connected else "Esperando conexion USB..."
                 processed = self.processor.generate_standby_frame(msg)
 
-            # Enviar a la cámara virtual si está activada
+            # Enviar a la cámara virtual en Windows
             if self.is_vcam_enabled and self.vcam.is_active:
                 self.vcam.send_frame(processed)
 
-            # Actualizar preview en la ventana de UI
-            try:
-                self._update_preview(processed)
-            except Exception:
-                pass
+            # Guardar referencia para que la UI la pinte desde el hilo principal
+            self._latest_display_frame = processed
 
-            # Actualizar textos de métricas
-            stats = self.receiver.get_stats()
-            self.after(0, self._update_metrics_ui, stats)
-
-            # Control de tasa de refresco
+            # Control de ritmo
             elapsed = time.time() - loop_start
             sleep_time = frame_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _update_preview(self, bgr_frame):
-        """Convierte la imagen BGR a CTkImage escalada para el canvas de la GUI."""
-        # Obtener dimensiones del canvas
-        cw = max(self.video_canvas.winfo_width(), 320)
-        ch = max(self.video_canvas.winfo_height(), 240)
+    def _ui_refresh_tick(self):
+        """Actualiza el canvas y las métricas en el hilo principal de Tkinter."""
+        if not self.is_running:
+            return
 
-        # Escalar manteniendo relación de aspecto
-        fh, fw = bgr_frame.shape[:2]
-        scale = min(cw / fw, ch / fh)
-        nw, nh = int(fw * scale), int(fh * scale)
+        frame = self._latest_display_frame
+        if frame is not None:
+            try:
+                cw = max(self.video_canvas.winfo_width(), 320)
+                ch = max(self.video_canvas.winfo_height(), 240)
+                fh, fw = frame.shape[:2]
+                scale = min(cw / fw, ch / fh)
+                nw, nh = max(int(fw * scale), 10), max(int(fh * scale), 10)
 
-        resized = cv2.resize(bgr_frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-        rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb_frame)
-        ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(nw, nh))
+                resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+                rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb_frame)
+                ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(nw, nh))
+                self.video_canvas.configure(image=ctk_img)
+            except Exception:
+                pass
 
-        self.video_canvas.configure(image=ctk_img)
-
-    def _update_metrics_ui(self, stats):
+        stats = self.receiver.get_stats()
         self.fps_label.configure(text=f"FPS: {stats['fps']:.1f}")
         self.bitrate_label.configure(text=f"Bitrate: {stats['bitrate_kbps']:.0f} Kbps")
         lat_text = f"{stats['latency_ms']:.0f} ms" if stats['latency_ms'] > 0 else "< 20 ms"
         self.latency_label.configure(text=f"Latencia: {lat_text}")
+
+        self.after(33, self._ui_refresh_tick)
 
     def _on_close(self):
         self.is_running = False

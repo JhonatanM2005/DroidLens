@@ -95,9 +95,11 @@ class StreamReceiver:
                 # Intentar conectar
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
                     s.settimeout(2.0)
                     s.connect((self.host, self.port))
-                    s.settimeout(1.0)
+                    s.settimeout(0.5)
                     self.sock = s
                     self.connected = True
                     logger.info(f"[OK] Conectado exitosamente al stream en {self.host}:{self.port}")

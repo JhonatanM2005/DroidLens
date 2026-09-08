@@ -2,6 +2,8 @@ package com.droidlens.app.network
 
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import java.io.BufferedOutputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -26,10 +28,13 @@ class StreamServer(private val port: Int = 8080) {
 
     private val isRunning = AtomicBoolean(false)
     private val isClientConnected = AtomicBoolean(false)
-    private val isSending = AtomicBoolean(false)
+
+    // Canal CONFLATED: la estructura óptima para baja latencia (siempre conserva el frame más reciente y descarta los viejos en 0ns)
+    private val frameChannel = Channel<ByteArray>(Channel.CONFLATED)
 
     private var frameIdCounter = AtomicInteger(0)
     private var serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var senderJob: Job? = null
 
     // Métricas de FPS
     private var framesSentCount = 0
@@ -55,7 +60,7 @@ class StreamServer(private val port: Int = 8080) {
                         synchronized(this@StreamServer) {
                             clientSocket?.close()
                             clientSocket = client
-                            outputStream = client.getOutputStream()
+                            outputStream = BufferedOutputStream(client.getOutputStream(), 128 * 1024)
                             isClientConnected.set(true)
                         }
 
@@ -64,6 +69,9 @@ class StreamServer(private val port: Int = 8080) {
                         withContext(Dispatchers.Main) {
                             callback?.onClientConnected(addr)
                         }
+
+                        // Iniciar bucle de envío dedicado de alta velocidad
+                        startSenderLoop()
 
                     } catch (e: Exception) {
                         if (isRunning.get()) {
@@ -80,46 +88,50 @@ class StreamServer(private val port: Int = 8080) {
         }
     }
 
-    fun sendFrame(jpegBytes: ByteArray) {
-        if (!isClientConnected.get() || outputStream == null) return
+    private fun startSenderLoop() {
+        senderJob?.cancel()
+        senderJob = serverScope.launch {
+            while (isActive && isClientConnected.get()) {
+                try {
+                    val jpegBytes = frameChannel.receive()
+                    val frameId = frameIdCounter.incrementAndGet()
+                    val timestamp = System.currentTimeMillis()
+                    val packet = PacketProtocol.packFrame(frameId, timestamp, jpegBytes)
 
-        // Si el socket aún está enviando el fotograma previo, descartar este para mantener latencia cero
-        if (!isSending.compareAndSet(false, true)) {
-            return
-        }
-
-        serverScope.launch {
-            try {
-                val frameId = frameIdCounter.incrementAndGet()
-                val timestamp = System.currentTimeMillis()
-                val packet = PacketProtocol.packFrame(frameId, timestamp, jpegBytes)
-
-                synchronized(this@StreamServer) {
-                    outputStream?.write(packet)
-                    outputStream?.flush()
-                }
-
-                // Cálculo de FPS
-                framesSentCount++
-                val now = System.currentTimeMillis()
-                if (now - lastFpsTimestamp >= 1000L) {
-                    val fps = (framesSentCount * 1000f) / (now - lastFpsTimestamp)
-                    framesSentCount = 0
-                    lastFpsTimestamp = now
-                    withContext(Dispatchers.Main) {
-                        callback?.onFpsUpdated(fps)
+                    synchronized(this@StreamServer) {
+                        outputStream?.write(packet)
+                        outputStream?.flush()
                     }
+
+                    // Cálculo de FPS
+                    framesSentCount++
+                    val now = System.currentTimeMillis()
+                    if (now - lastFpsTimestamp >= 1000L) {
+                        val fps = (framesSentCount * 1000f) / (now - lastFpsTimestamp)
+                        framesSentCount = 0
+                        lastFpsTimestamp = now
+                        withContext(Dispatchers.Main) {
+                            callback?.onFpsUpdated(fps)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error en bucle de envio: ${e.message}")
+                    handleClientDisconnected()
+                    break
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error enviando frame, cliente desconectado: ${e.message}")
-                handleClientDisconnected()
-            } finally {
-                isSending.set(false)
             }
         }
     }
 
+    fun sendFrame(jpegBytes: ByteArray) {
+        if (!isClientConnected.get()) return
+        // trySend es no bloqueante y aprovecha Channel.CONFLATED para mantener latencia cero
+        frameChannel.trySend(jpegBytes)
+    }
+
     private fun handleClientDisconnected() {
+        senderJob?.cancel()
+        senderJob = null
         synchronized(this) {
             isClientConnected.set(false)
             try {
