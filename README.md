@@ -45,6 +45,71 @@
 
 ---
 
+## 📁 Estructura del Repositorio
+
+```text
+DroidLens/
+├── dist/                        # Instaladores y binarios compilados listos para usar
+│   ├── DroidLens-Setup-v1.0.0.exe        # Instalador wizard para Windows (Inno Setup)
+│   ├── DroidLens-Windows-Portable-v1.0.0.zip # Versión portable sin instalación
+│   └── DroidLens/                        # Carpeta del ejecutable compilado (PyInstaller)
+│       └── DroidLens.exe                 # Binario principal de escritorio
+│
+├── driver/                      # Driver DirectShow independiente (UnityCapture)
+│   ├── install_driver.bat       # Registro del driver en Windows con permisos UAC
+│   ├── uninstall_driver.bat     # Desinstalación limpia del filtro
+│   ├── UnityCaptureFilter64.dll # Filtro de vídeo 64 bits
+│   └── UnityCaptureFilter32.dll # Filtro de vídeo 32 bits
+│
+├── installer/                   # Definición de instaladores
+│   └── droidlens.iss            # Script de Inno Setup 6 con elevación UAC selectiva
+│
+├── pc_client/                   # Aplicación de escritorio para Windows (Python)
+│   ├── droidlens.spec           # Especificación de PyInstaller (--onedir)
+│   ├── requirements.txt         # Dependencias de producción
+│   ├── requirements-dev.txt     # Dependencias de desarrollo y testing (pytest)
+│   ├── bin/adb/                 # Binarios portables de ADB (adb.exe y DLLs)
+│   ├── main.py                  # Punto de entrada de la aplicación
+│   ├── run.bat                  # Lanzador rápido con venv automático
+│   ├── tests/                   # Suite de 18 pruebas unitarias (pytest)
+│   │   ├── test_adb.py          # Pruebas de ADB, aislamiento de serial y comandos
+│   │   ├── test_processor.py    # Pruebas de transformación de imagen y standby
+│   │   ├── test_protocol.py     # Pruebas de empaquetado y resincronización APCM
+│   │   └── test_receiver.py     # Pruebas de desconexión inmediata y frames caídos
+│   └── src/
+│       ├── core/                # Receptor LIFO reactivo, protocolo y cámara virtual
+│       ├── ui/                  # Interfaz gráfica moderna (CustomTkinter)
+│       ├── usb/                 # Gestor multi-dispositivo y forward con serial
+│       └── utils/               # Gestor de rutas portables (paths.py)
+│
+├── android/                     # Aplicación móvil nativa en Kotlin (CameraX)
+│   ├── gradlew / gradlew.bat    # Gradle Wrapper oficial reproducible (v8.13)
+│   ├── app/src/main/
+│   │   ├── AndroidManifest.xml  # Permisos de cámara, ForegroundService y backup
+│   │   ├── java/com/droidlens/app/
+│   │   │   ├── MainActivity.kt  # UI móvil, controles táctiles y cliente de servicio
+│   │   │   ├── camera/          # VideoProfile, CameraManager, zoom y enfoque
+│   │   │   ├── network/         # StreamServer (127.0.0.1) y transporte cero copias
+│   │   │   ├── service/         # CamStreamService (LifecycleService con WakeLock)
+│   │   │   └── util/            # Conversión acelerada por hardware (libyuv)
+│   │   └── res/                 # Layouts y recursos visuales
+│   └── app/src/test/            # Tests unitarios JUnit para Android
+│
+├── scripts/                     # Herramientas de automatización y testing
+│   ├── build_windows_dist.py    # Pipeline de dos etapas: PyInstaller + Inno Setup
+│   ├── package_windows.py       # Empaquetador zip portable
+│   ├── build_apk.bat            # Compilador rápido de APK con gradlew
+│   ├── simulate_phone_stream.py # Simulador del feed de Android para PC
+│   └── test_pipeline.py         # Test de integración E2E
+│
+├── .github/workflows/ci.yml     # Pipeline de integración continua (CI) en GitHub Actions
+├── DroidLens.apk                # APK precompilado listo para instalar (6.70 MB)
+├── run.bat                      # Iniciar DroidLens en PC con un solo clic
+└── README.md
+```
+
+---
+
 ## 📡 Especificación del Protocolo APCM
 
 La comunicación entre el celular y la PC utiliza un socket TCP sobre el túnel ADB con una cabecera binaria fija de 20 bytes (Big-Endian):
