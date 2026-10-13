@@ -2,7 +2,9 @@
 ; Genera DroidLens-Setup.exe con instalación per-user e instalación opcional de driver con UAC
 
 #define MyAppName "DroidLens"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.1.0"
+#endif
 #define MyAppPublisher "DroidLens Project"
 #define MyAppURL "https://github.com/JhonatanM2005/DroidLens"
 #define MyAppExeName "DroidLens.exe"

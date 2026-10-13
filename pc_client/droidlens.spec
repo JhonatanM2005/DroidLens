@@ -13,6 +13,7 @@ driver_dir = os.path.join(base_dir, "driver")
 added_datas = [
     (bin_adb_dir, os.path.join("bin", "adb")),
     (driver_dir, "driver"),
+    (os.path.join(base_dir, "VERSION"), "."),
 ]
 
 # Incluir custom tkinter assets
@@ -32,7 +33,9 @@ a = Analysis(
         'customtkinter',
         'pyvirtualcam',
         'cv2',
-        'sounddevice'
+        'sounddevice',
+        'pystray',
+        'pystray._win32',
     ],
     hookspath=[],
     hooksconfig={},

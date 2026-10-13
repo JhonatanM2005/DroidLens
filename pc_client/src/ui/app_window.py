@@ -24,7 +24,8 @@ try:
     from core.virtual_camera import VirtualCameraManager
     from core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from adb.adb_manager import ADBManager
-    from utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script
+    from ui.tray_manager import TrayManager
+    from utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script, get_app_version
 except ImportError:
     from ..core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from ..core.receiver import StreamReceiver, FrameStatus
@@ -32,7 +33,8 @@ except ImportError:
     from ..core.virtual_camera import VirtualCameraManager
     from ..core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from ..adb.adb_manager import ADBManager
-    from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script
+    from .tray_manager import TrayManager
+    from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script, get_app_version
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -48,7 +50,8 @@ class DroidLensApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("DroidLens — Webcam y Micrófono USB para Windows")
+        self.app_version = get_app_version()
+        self.title(f"DroidLens v{self.app_version} — Webcam y Micrófono USB para Windows")
         self.geometry("1040x760")
         self.minsize(880, 620)
 
@@ -87,6 +90,7 @@ class DroidLensApp(ctk.CTk):
 
         self.is_running = True
         self.is_vcam_enabled = False
+        self._is_hidden_in_tray = False
         self._latest_display_frame = None
         self._is_in_standby = True
         self._latest_frame_id = -1
@@ -98,6 +102,15 @@ class DroidLensApp(ctk.CTk):
 
         # Inicializar salida de audio según el modo actual
         self._sync_audio_output_with_mode(initial_mode)
+
+        # Iniciar Bandeja del Sistema (System Tray)
+        self.tray_manager = TrayManager(
+            on_restore=self._restore_from_tray_safe,
+            on_select_mode=self._on_tray_mode_selected,
+            on_quit=self._quit_app_safe,
+            get_current_mode=lambda: self.receiver.stream_mode,
+        )
+        self.tray_manager.start()
 
         # Iniciar receptor y bucles secundarios
         self.receiver.start()
@@ -114,7 +127,8 @@ class DroidLensApp(ctk.CTk):
         # Iniciar refresco del preview en el hilo principal de la GUI
         self.after(33, self._ui_refresh_tick)
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_button)
+        self.bind("<Unmap>", self._on_window_unmap)
 
     def _load_settings(self) -> Dict[str, Any]:
         default_settings = {
@@ -125,6 +139,7 @@ class DroidLensApp(ctk.CTk):
             "last_serial": None,
             "stream_mode": STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO],
             "audio_output_device": None,
+            "close_to_tray": True,
         }
         settings_file = get_settings_file()
         if os.path.exists(settings_file):
@@ -391,7 +406,37 @@ class DroidLensApp(ctk.CTk):
             fg_color="#1E3A5F",
             hover_color="#2B4C7E"
         )
-        self.btn_reconnect_adb.pack(fill="x", padx=12, pady=(6, 12))
+        self.btn_reconnect_adb.pack(fill="x", padx=12, pady=(6, 8))
+
+        self._add_separator()
+
+        # Segundo Plano (System Tray)
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Segundo Plano (Bandeja)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(6, 2), padx=12, anchor="w")
+
+        self.close_to_tray_switch = ctk.CTkSwitch(
+            self.controls_frame,
+            text="Minimizar a bandeja al cerrar (X)",
+            progress_color="#00E5FF",
+            command=self._toggle_close_to_tray,
+        )
+        if self.settings.get("close_to_tray", True):
+            self.close_to_tray_switch.select()
+        else:
+            self.close_to_tray_switch.deselect()
+        self.close_to_tray_switch.pack(pady=4, padx=12, anchor="w")
+
+        self.btn_hide_to_tray = ctk.CTkButton(
+            self.controls_frame,
+            text="🔽 Ocultar en Bandeja Ahora",
+            command=self._hide_to_tray,
+            fg_color="#2A2D32",
+            hover_color="#3A3D42",
+        )
+        self.btn_hide_to_tray.pack(fill="x", padx=12, pady=(4, 12))
 
     def _build_audio_device_options(self) -> List[str]:
         devices = [d["name"] for d in self.audio_output.list_output_devices()]
@@ -413,6 +458,8 @@ class DroidLensApp(ctk.CTk):
         self._save_settings()
         self.receiver.set_stream_mode(mode, notify_remote=True)
         self._sync_audio_output_with_mode(mode)
+        if hasattr(self, "tray_manager"):
+            self.tray_manager.update_menu()
 
     def _on_remote_mode_changed(self, mode: StreamMode):
         def _apply():
@@ -421,6 +468,8 @@ class DroidLensApp(ctk.CTk):
             self.settings["stream_mode"] = label
             self._save_settings()
             self._sync_audio_output_with_mode(mode)
+            if hasattr(self, "tray_manager"):
+                self.tray_manager.update_menu()
 
         self.after(0, _apply)
 
@@ -704,6 +753,11 @@ class DroidLensApp(ctk.CTk):
         if not self.is_running:
             return
 
+        # Si está oculta en la bandeja del sistema, omitir el renderizado visual para ahorrar CPU
+        if self._is_hidden_in_tray:
+            self.after(250, self._ui_refresh_tick)
+            return
+
         frame = self._latest_display_frame
         should_render = self._is_in_standby or (self._latest_frame_id != self._last_rendered_id)
 
@@ -733,8 +787,69 @@ class DroidLensApp(ctk.CTk):
 
         self.after(33, self._ui_refresh_tick)
 
-    def _on_close(self):
+    def _toggle_close_to_tray(self):
+        val = bool(self.close_to_tray_switch.get())
+        self.settings["close_to_tray"] = val
+        self._save_settings()
+
+    def _hide_to_tray(self):
+        """Oculta la ventana de la barra de tareas y mantiene DroidLens en la bandeja del sistema."""
+        if hasattr(self, "tray_manager") and self.tray_manager.is_running:
+            self._is_hidden_in_tray = True
+            self.withdraw()
+
+    def _restore_from_tray_safe(self):
+        self.after(0, self._restore_from_tray)
+
+    def _restore_from_tray(self):
+        self._is_hidden_in_tray = False
+        self._last_rendered_id = -2
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
+
+    def _on_tray_mode_selected(self, mode: StreamMode):
+        def _apply():
+            label = STREAM_MODE_LABELS.get(mode, STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO])
+            self.mode_menu.set(label)
+            self._on_mode_menu_selected(label)
+
+        self.after(0, _apply)
+
+    def _on_window_unmap(self, event=None):
+        """Si el usuario minimiza la ventana y el modo bandeja está activo, ocultarla de la barra de tareas."""
+        if event is not None and event.widget is not self:
+            return
+        try:
+            if (
+                self.settings.get("close_to_tray", True)
+                and hasattr(self, "tray_manager")
+                and self.tray_manager.is_running
+                and self.state() == "iconic"
+            ):
+                self.after(10, self._hide_to_tray)
+        except Exception:
+            pass
+
+    def _on_close_button(self):
+        """Intercepta el botón X: oculta en bandeja si está habilitado; de lo contrario cierra la app."""
+        if (
+            self.settings.get("close_to_tray", True)
+            and hasattr(self, "tray_manager")
+            and self.tray_manager.is_running
+        ):
+            self._hide_to_tray()
+        else:
+            self._quit_app()
+
+    def _quit_app_safe(self):
+        self.after(0, self._quit_app)
+
+    def _quit_app(self):
         self.is_running = False
+        if hasattr(self, "tray_manager"):
+            self.tray_manager.stop()
         try:
             self.adb_manager.remove_port_forward(8080)
         except Exception:
@@ -748,3 +863,4 @@ class DroidLensApp(ctk.CTk):
 if __name__ == "__main__":
     app = DroidLensApp()
     app.mainloop()
+

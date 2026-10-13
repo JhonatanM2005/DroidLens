@@ -3,6 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val resolvedVersionName: String = (
+    System.getenv("DROIDLENS_VERSION")?.trim()?.removePrefix("v")?.removePrefix("V")?.takeIf { it.isNotEmpty() }
+        ?: rootProject.file("../VERSION").takeIf { it.exists() }?.readText()?.trim()?.removePrefix("v")?.removePrefix("V")
+        ?: "1.1.0"
+)
+
 android {
     namespace = "com.droidlens.app"
     compileSdk = 34
@@ -11,8 +17,8 @@ android {
         applicationId = "com.droidlens.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = resolvedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

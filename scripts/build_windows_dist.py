@@ -1,7 +1,7 @@
 """
 Script de compilación y empaquetado para distribución en Windows.
 Etapa 1: Congela la aplicación PC con PyInstaller en modo --onedir (dist/DroidLens/).
-Etapa 2: Si Inno Setup está disponible (ISCC), compila el instalador DroidLens-Setup.exe.
+Etapa 2: Si Inno Setup está disponible (ISCC), compila el instalador DroidLens-Setup-v<version>.exe.
 """
 
 import os
@@ -9,6 +9,7 @@ import sys
 import shutil
 import subprocess
 import zipfile
+
 
 def find_inno_setup() -> str:
     """Busca el compilador de Inno Setup (ISCC.exe) en las rutas habituales."""
@@ -24,14 +25,30 @@ def find_inno_setup() -> str:
             return c
     return ""
 
+
+def resolve_version(repo_dir: str) -> str:
+    """Obtiene la versión desde DROIDLENS_VERSION o el archivo VERSION raíz."""
+    env_ver = os.environ.get("DROIDLENS_VERSION", "").strip()
+    if env_ver:
+        return env_ver.lstrip("vV")
+    version_file = os.path.join(repo_dir, "VERSION")
+    if os.path.exists(version_file):
+        with open(version_file, "r", encoding="utf-8") as f:
+            ver = f.read().strip().lstrip("vV")
+            if ver:
+                return ver
+    return "1.1.0"
+
+
 def build_distribution():
     repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    version = resolve_version(repo_dir)
     dist_dir = os.path.join(repo_dir, "dist")
     spec_file = os.path.join(repo_dir, "pc_client", "droidlens.spec")
     iss_file = os.path.join(repo_dir, "installer", "droidlens.iss")
 
     print("===================================================")
-    print("      DroidLens - Pipeline de Empaquetado Windows   ")
+    print(f"  DroidLens v{version} - Pipeline de Empaquetado Windows")
     print("===================================================")
 
     # 1. Compilar con PyInstaller en modo onedir
@@ -54,11 +71,11 @@ def build_distribution():
     # Copiar scripts de drivers dentro de la carpeta portable para comodidad
     app_dist_dir = os.path.join(dist_dir, "DroidLens")
     driver_dist = os.path.join(app_dist_dir, "driver")
-    if os.path.exists(os.path.join(repo_dir, "driver")):
-        shutil.copytree(os.path.join(repo_dir, "driver"), driver_dist, dirs_exist_ok=True)
+    if os.path.exists(os.path.join(repo_dir, "driver")) and not os.path.exists(driver_dist):
+        shutil.copytree(os.path.join(repo_dir, "driver"), driver_dist)
 
     # Crear ZIP de la versión portable
-    zip_path = os.path.join(dist_dir, "DroidLens-Windows-Portable-v1.0.0.zip")
+    zip_path = os.path.join(dist_dir, f"DroidLens-Windows-Portable-v{version}.zip")
     print(f"\nGenerando archivo ZIP portable en {zip_path}...")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for root, _, files in os.walk(app_dist_dir):
@@ -74,8 +91,8 @@ def build_distribution():
     if iscc:
         print(f"Inno Setup encontrado en: {iscc}")
         try:
-            subprocess.run([iscc, iss_file], check=True)
-            print("[OK] Instalador DroidLens-Setup-v1.0.0.exe generado en dist/")
+            subprocess.run([iscc, f"/DMyAppVersion={version}", iss_file], check=True)
+            print(f"[OK] Instalador DroidLens-Setup-v{version}.exe generado en dist/")
         except Exception as e:
             print(f"[AVISO] No se pudo compilar con Inno Setup: {e}")
     else:
@@ -84,6 +101,7 @@ def build_distribution():
         print("  El ejecutable portable dist/DroidLens/DroidLens.exe y el ZIP están listos para usarse.")
 
     return True
+
 
 if __name__ == "__main__":
     build_distribution()

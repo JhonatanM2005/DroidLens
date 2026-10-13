@@ -76,3 +76,31 @@ def find_driver_script(script_name: str) -> str:
             return path
     return ""
 
+
+def get_app_version() -> str:
+    """
+    Resuelve la versión semántica de la aplicación:
+    1. Variable de entorno DROIDLENS_VERSION (quitando prefijo 'v' si existe).
+    2. Archivo VERSION en el bundle o en la raíz del repositorio.
+    3. Fallback '1.0.0'.
+    """
+    env_ver = os.environ.get("DROIDLENS_VERSION", "").strip()
+    if env_ver:
+        return env_ver.lstrip("vV")
+
+    candidates = [
+        os.path.join(get_bundle_dir(), "VERSION"),
+        os.path.abspath(os.path.join(get_bundle_dir(), "..", "VERSION")),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    val = f.read().strip().lstrip("vV")
+                    if val:
+                        return val
+            except Exception:
+                pass
+    return "1.0.0"
+
+
