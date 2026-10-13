@@ -9,7 +9,11 @@ echo.
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Solicitando permisos de administrador...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs -Wait"
+    if "%~1"=="" (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs -Wait"
+    ) else (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs -Wait"
+    )
     exit /b
 )
 

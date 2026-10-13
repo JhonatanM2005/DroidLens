@@ -301,6 +301,64 @@ static void ConvertRGB32ToNV12(const BYTE* input, LONG inputStride, UINT width, 
     }
 }
 
+static void ConvertRGB32ToNV12Scaled(
+    const BYTE* input, LONG inputStride, UINT srcW, UINT srcH,
+    BYTE* output, LONG outputStride, UINT dstW, UINT dstH
+) {
+    for (UINT h = 0; h + 1 < dstH; h += 2) {
+        UINT sy1 = (h * srcH) / dstH;
+        UINT sy2 = ((h + 1) * srcH) / dstH;
+        if (sy1 >= srcH) sy1 = srcH - 1;
+        if (sy2 >= srcH) sy2 = srcH - 1;
+        const BYTE* rgbRow1 = input + sy1 * inputStride;
+        const BYTE* rgbRow2 = input + sy2 * inputStride;
+        BYTE* y1 = output + h * outputStride;
+        BYTE* y2 = output + (h + 1) * outputStride;
+        BYTE* uv = output + (h / 2 + dstH) * outputStride;
+        for (UINT w = 0; w + 1 < dstW; w += 2) {
+            UINT sx1 = (w * srcW) / dstW;
+            UINT sx2 = ((w + 1) * srcW) / dstW;
+            if (sx1 >= srcW) sx1 = srcW - 1;
+            if (sx2 >= srcW) sx2 = srcW - 1;
+            const BYTE* p11 = rgbRow1 + sx1 * 4;
+            const BYTE* p12 = rgbRow1 + sx2 * 4;
+            const BYTE* p21 = rgbRow2 + sx1 * 4;
+            const BYTE* p22 = rgbRow2 + sx2 * 4;
+            RGB24ToYUY2(p11[2], p11[1], p11[0], y1, uv, uv + 1);
+            RGB24ToY(p12[2], p12[1], p12[0], y1 + 1);
+            RGB24ToYUY2(p21[2], p21[1], p21[0], y2, uv, uv + 1);
+            RGB24ToY(p22[2], p22[1], p22[0], y2 + 1);
+            y1 += 2;
+            y2 += 2;
+            uv += 2;
+        }
+    }
+}
+
+static HRESULT CreateVideoMediaType(REFGUID subType, UINT32 width, UINT32 height, UINT32 fps, IMFMediaType** ppType) {
+    IMFMediaType* pType = nullptr;
+    HRESULT hr = MFCreateMediaType(&pType);
+    if (FAILED(hr)) return hr;
+    pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    pType->SetGUID(MF_MT_SUBTYPE, subType);
+    MFSetAttributeSize(pType, MF_MT_FRAME_SIZE, width, height);
+    if (subType == MFVideoFormat_NV12) {
+        pType->SetUINT32(MF_MT_DEFAULT_STRIDE, width);
+        pType->SetUINT32(MF_MT_SAMPLE_SIZE, (width * height * 3) / 2);
+        pType->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(width * 1.5 * height * 8 * fps));
+    } else {
+        pType->SetUINT32(MF_MT_DEFAULT_STRIDE, width * 4);
+        pType->SetUINT32(MF_MT_SAMPLE_SIZE, width * height * 4);
+        pType->SetUINT32(MF_MT_AVG_BITRATE, width * height * 4 * 8 * fps);
+    }
+    pType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    pType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    MFSetAttributeRatio(pType, MF_MT_FRAME_RATE, fps, 1);
+    MFSetAttributeRatio(pType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    *ppType = pType;
+    return S_OK;
+}
+
 class DroidLensMediaSource;
 
 // ============================================================================
@@ -339,48 +397,25 @@ public:
         hr = MFCreateEventQueue(&m_eventQueue);
         if (FAILED(hr)) return hr;
 
-        IMFMediaType* rgbType = nullptr;
-        hr = MFCreateMediaType(&rgbType);
-        if (FAILED(hr)) return hr;
-        rgbType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        rgbType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-        MFSetAttributeSize(rgbType, MF_MT_FRAME_SIZE, m_width, m_height);
-        rgbType->SetUINT32(MF_MT_DEFAULT_STRIDE, m_width * 4);
-        rgbType->SetUINT32(MF_MT_SAMPLE_SIZE, m_width * m_height * 4);
-        rgbType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-        rgbType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
-        MFSetAttributeRatio(rgbType, MF_MT_FRAME_RATE, m_fps, 1);
-        rgbType->SetUINT32(MF_MT_AVG_BITRATE, m_width * m_height * 4 * 8 * m_fps);
-        MFSetAttributeRatio(rgbType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-
-        IMFMediaType* nv12Type = nullptr;
-        hr = MFCreateMediaType(&nv12Type);
+        IMFMediaType* types[4] = {};
+        hr = CreateVideoMediaType(MFVideoFormat_RGB32, 1280, 720, m_fps, &types[0]);
+        if (SUCCEEDED(hr)) hr = CreateVideoMediaType(MFVideoFormat_NV12, 1280, 720, m_fps, &types[1]);
+        if (SUCCEEDED(hr)) hr = CreateVideoMediaType(MFVideoFormat_RGB32, 1920, 1080, m_fps, &types[2]);
+        if (SUCCEEDED(hr)) hr = CreateVideoMediaType(MFVideoFormat_NV12, 1920, 1080, m_fps, &types[3]);
         if (FAILED(hr)) {
-            rgbType->Release();
+            for (auto* t : types) { if (t) t->Release(); }
             return hr;
         }
-        nv12Type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        nv12Type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
-        MFSetAttributeSize(nv12Type, MF_MT_FRAME_SIZE, m_width, m_height);
-        nv12Type->SetUINT32(MF_MT_DEFAULT_STRIDE, m_width);
-        nv12Type->SetUINT32(MF_MT_SAMPLE_SIZE, (m_width * m_height * 3) / 2);
-        nv12Type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-        nv12Type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
-        MFSetAttributeRatio(nv12Type, MF_MT_FRAME_RATE, m_fps, 1);
-        nv12Type->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(m_width * 1.5 * m_height * 8 * m_fps));
-        MFSetAttributeRatio(nv12Type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
 
-        IMFMediaType* types[2] = { rgbType, nv12Type };
-        hr = MFCreateStreamDescriptor(index, 2, types, &m_sd);
+        hr = MFCreateStreamDescriptor(index, 4, types, &m_sd);
         if (SUCCEEDED(hr)) {
             IMFMediaTypeHandler* handler = nullptr;
             if (SUCCEEDED(m_sd->GetMediaTypeHandler(&handler))) {
-                handler->SetCurrentMediaType(rgbType);
+                handler->SetCurrentMediaType(types[0]);
                 handler->Release();
             }
         }
-        rgbType->Release();
-        nv12Type->Release();
+        for (auto* t : types) { if (t) t->Release(); }
 
         m_hMap = OpenSharedMemoryFile(false, &m_mapView, nullptr);
         TraceLog("MediaStream::Initialize hr=0x%08lX", hr);
@@ -491,6 +526,10 @@ public:
         BYTE* scanline = nullptr;
         LONG pitch = 0;
 
+        const DWORD cbUsed = (m_format == MFVideoFormat_NV12)
+            ? ((m_width * m_height * 3) / 2)
+            : (m_width * m_height * 4);
+
         if (SUCCEEDED(pBuffer->QueryInterface(IID_PPV_ARGS(&pBuffer2D2)))) {
             BYTE* start = nullptr;
             DWORD length = 0;
@@ -498,6 +537,7 @@ public:
             if (SUCCEEDED(hr)) {
                 FillSamplePixels(scanline, pitch);
                 pBuffer2D2->Unlock2D();
+                pBuffer->SetCurrentLength(length > 0 ? length : cbUsed);
             }
             pBuffer2D2->Release();
         } else if (SUCCEEDED(pBuffer->QueryInterface(IID_PPV_ARGS(&pBuffer2D)))) {
@@ -505,6 +545,7 @@ public:
             if (SUCCEEDED(hr)) {
                 FillSamplePixels(scanline, pitch);
                 pBuffer2D->Unlock2D();
+                pBuffer->SetCurrentLength(cbUsed);
             }
             pBuffer2D->Release();
         } else {
@@ -514,7 +555,6 @@ public:
                 LONG defaultPitch = (m_format == MFVideoFormat_NV12) ? static_cast<LONG>(m_width) : static_cast<LONG>(m_width * 4);
                 FillSamplePixels(scanline, defaultPitch);
                 pBuffer->Unlock();
-                DWORD cbUsed = (m_format == MFVideoFormat_NV12) ? ((m_width * m_height * 3) / 2) : (m_width * m_height * 4);
                 pBuffer->SetCurrentLength(cbUsed);
             }
         }
@@ -561,25 +601,38 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_eventQueue) return MF_E_SHUTDOWN;
 
-        if (pType) {
-            pType->GetGUID(MF_MT_SUBTYPE, &m_format);
-        }
-        if (m_allocator) {
-            IMFMediaType* pInitType = pType;
-            IMFMediaType* pCurrentType = nullptr;
-            if (!pInitType && m_sd) {
-                IMFMediaTypeHandler* handler = nullptr;
-                if (SUCCEEDED(m_sd->GetMediaTypeHandler(&handler))) {
-                    handler->GetCurrentMediaType(&pCurrentType);
-                    pInitType = pCurrentType;
-                    handler->Release();
-                }
+        IMFMediaType* pInitType = pType;
+        IMFMediaType* pCurrentType = nullptr;
+        if (pType && m_sd) {
+            IMFMediaTypeHandler* handler = nullptr;
+            if (SUCCEEDED(m_sd->GetMediaTypeHandler(&handler))) {
+                handler->SetCurrentMediaType(pType);
+                handler->Release();
             }
-            if (pInitType) {
-                m_allocator->InitializeSampleAllocator(10, pInitType);
+        } else if (!pInitType && m_sd) {
+            IMFMediaTypeHandler* handler = nullptr;
+            if (SUCCEEDED(m_sd->GetMediaTypeHandler(&handler))) {
+                handler->GetCurrentMediaType(&pCurrentType);
+                pInitType = pCurrentType;
+                handler->Release();
             }
-            if (pCurrentType) pCurrentType->Release();
         }
+
+        if (pInitType) {
+            pInitType->GetGUID(MF_MT_SUBTYPE, &m_format);
+            UINT32 w = 0, h = 0;
+            if (SUCCEEDED(MFGetAttributeSize(pInitType, MF_MT_FRAME_SIZE, &w, &h)) && w > 0 && h > 0) {
+                m_width = w;
+                m_height = h;
+            }
+        }
+
+        if (m_allocator && pInitType) {
+            m_allocator->UninitializeSampleAllocator();
+            HRESULT hrAlloc = m_allocator->InitializeSampleAllocator(10, pInitType);
+            TraceLog("MediaStream::Start InitializeSampleAllocator (%ux%u) hr=0x%08lX", m_width, m_height, hrAlloc);
+        }
+        if (pCurrentType) pCurrentType->Release();
 
         HRESULT hr = m_eventQueue->QueueEventParamVar(MEStreamStarted, GUID_NULL, S_OK, nullptr);
         if (SUCCEEDED(hr)) {
@@ -697,18 +750,28 @@ private:
         }
 
         const uint8_t* srcBgra = nullptr;
+        UINT srcW = m_width;
+        UINT srcH = m_height;
         LONG srcStride = static_cast<LONG>(m_width * 4);
 
         if (m_mapView) {
             const auto* hdr = reinterpret_cast<const SharedFrameHeader*>(m_mapView);
-            if (hdr->magic == kSharedMagic && hdr->frame_index > 0 && hdr->width == m_width && hdr->height == m_height) {
+            if (hdr->magic == kSharedMagic && hdr->frame_index > 0 && hdr->width > 0 && hdr->height > 0 &&
+                static_cast<size_t>(hdr->width) * static_cast<size_t>(hdr->height) * 4 <= kMaxFrameBytes) {
+                srcW = hdr->width;
+                srcH = hdr->height;
+                srcStride = static_cast<LONG>(srcW * 4);
                 srcBgra = m_mapView + sizeof(SharedFrameHeader);
             }
         }
 
         if (m_format == MFVideoFormat_NV12) {
             if (srcBgra) {
-                ConvertRGB32ToNV12(srcBgra, srcStride, m_width, m_height, pDst, dstPitch);
+                if (srcW == m_width && srcH == m_height) {
+                    ConvertRGB32ToNV12(srcBgra, srcStride, m_width, m_height, pDst, dstPitch);
+                } else {
+                    ConvertRGB32ToNV12Scaled(srcBgra, srcStride, srcW, srcH, pDst, dstPitch, m_width, m_height);
+                }
             } else {
                 for (UINT y = 0; y < m_height; ++y) {
                     std::memset(pDst + y * dstPitch, 22, m_width);
@@ -722,8 +785,26 @@ private:
 
         // RGB32 (BGRA)
         if (srcBgra) {
-            for (UINT y = 0; y < m_height; ++y) {
-                std::memcpy(pDst + y * dstPitch, srcBgra + y * srcStride, m_width * 4);
+            if (srcW == m_width && srcH == m_height) {
+                for (UINT y = 0; y < m_height; ++y) {
+                    std::memcpy(pDst + y * dstPitch, srcBgra + y * srcStride, m_width * 4);
+                }
+            } else {
+                for (UINT y = 0; y < m_height; ++y) {
+                    UINT sy = (y * srcH) / m_height;
+                    if (sy >= srcH) sy = srcH - 1;
+                    const BYTE* srcRow = srcBgra + sy * srcStride;
+                    BYTE* dstRow = pDst + y * dstPitch;
+                    for (UINT x = 0; x < m_width; ++x) {
+                        UINT sx = (x * srcW) / m_width;
+                        if (sx >= srcW) sx = srcW - 1;
+                        const BYTE* p = srcRow + sx * 4;
+                        dstRow[x * 4 + 0] = p[0];
+                        dstRow[x * 4 + 1] = p[1];
+                        dstRow[x * 4 + 2] = p[2];
+                        dstRow[x * 4 + 3] = 255;
+                    }
+                }
             }
         } else {
             for (UINT y = 0; y < m_height; ++y) {
@@ -821,6 +902,7 @@ public:
         hr = MFCreatePresentationDescriptor(1, sds, &m_pd);
         pSD->Release();
         if (FAILED(hr)) return hr;
+        m_pd->SelectStream(0);
 
         hr = MFCreateEventQueue(&m_eventQueue);
         TraceLog("MediaSource::Initialize hr=0x%08lX", hr);
@@ -988,23 +1070,22 @@ public:
             thisSelected = TRUE;
         }
 
-        if (selected != thisSelected) {
-            if (selected) {
-                m_pd->SelectStream(0);
-                m_eventQueue->QueueEventParamUnk(MENewStream, GUID_NULL, S_OK, static_cast<IMFMediaStream2*>(m_stream));
+        if (selected) {
+            m_pd->SelectStream(0);
+            MediaEventType met = thisSelected ? MEUpdatedStream : MENewStream;
+            m_eventQueue->QueueEventParamUnk(met, GUID_NULL, S_OK, static_cast<IMFMediaStream2*>(m_stream));
 
-                IMFMediaTypeHandler* handler = nullptr;
-                IMFMediaType* type = nullptr;
-                if (SUCCEEDED(desc->GetMediaTypeHandler(&handler))) {
-                    handler->GetCurrentMediaType(&type);
-                    handler->Release();
-                }
-                hr = m_stream->Start(type);
-                if (type) type->Release();
-            } else {
-                m_pd->DeselectStream(0);
-                hr = m_stream->Stop();
+            IMFMediaTypeHandler* handler = nullptr;
+            IMFMediaType* type = nullptr;
+            if (SUCCEEDED(desc->GetMediaTypeHandler(&handler))) {
+                handler->GetCurrentMediaType(&type);
+                handler->Release();
             }
+            hr = m_stream->Start(type);
+            if (type) type->Release();
+        } else if (thisSelected) {
+            m_pd->DeselectStream(0);
+            hr = m_stream->Stop();
         }
         desc->Release();
         if (FAILED(hr)) return hr;
