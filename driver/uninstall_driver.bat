@@ -1,7 +1,7 @@
 @echo off
-title AppCam - Desinstalador de Driver DirectShow
+title DroidLens - Desinstalador de Drivers de Camara Virtual
 echo ===================================================
-echo    AppCam - Desinstalador de Driver DirectShow
+echo  DroidLens - Desinstalador de Drivers de Camara Virtual
 echo ===================================================
 echo.
 
@@ -15,15 +15,18 @@ if %errorlevel% neq 0 (
 
 cd /d "%~dp0"
 
-echo Desregistrando UnityCaptureFilter32.dll...
-regsvr32.exe /u /s "%~dp0UnityCaptureFilter32.dll"
+echo Desregistrando DroidLensMF.dll...
+if exist "%~dp0DroidLensMF.dll" regsvr32.exe /u /s "%~dp0DroidLensMF.dll"
 
-echo Desregistrando UnityCaptureFilter64.dll...
-regsvr32.exe /u /s "%~dp0UnityCaptureFilter64.dll"
+echo Desregistrando UnityCaptureFilter32.dll y UnityCaptureFilter64.dll...
+if exist "%~dp0UnityCaptureFilter32.dll" regsvr32.exe /u /s "%~dp0UnityCaptureFilter32.dll"
+if exist "%~dp0UnityCaptureFilter64.dll" regsvr32.exe /u /s "%~dp0UnityCaptureFilter64.dll"
 
 echo.
 echo ===================================================
-echo  [OK] Driver desinstalado con exito.
+echo  [OK] Drivers desinstalados con exito.
 echo ===================================================
-echo.
-pause
+if "%1" neq "--silent" (
+    echo.
+    pause
+)

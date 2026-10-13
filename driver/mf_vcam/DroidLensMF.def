@@ -1,0 +1,10 @@
+LIBRARY "DroidLensMF"
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
+    DllRegisterServer   PRIVATE
+    DllUnregisterServer PRIVATE
+    dl_mf_is_supported
+    dl_mf_start
+    dl_mf_send_frame
+    dl_mf_stop

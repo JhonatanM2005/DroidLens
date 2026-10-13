@@ -1,7 +1,7 @@
 @echo off
-title AppCam - Instalador de Driver DirectShow
+title DroidLens - Instalador de Drivers de Camara Virtual
 echo ===================================================
-echo     AppCam - Instalador de Driver DirectShow
+echo   DroidLens - Instalador de Drivers de Camara Virtual
 echo ===================================================
 echo.
 
@@ -15,22 +15,28 @@ if %errorlevel% neq 0 (
 
 cd /d "%~dp0"
 
-echo Registrando UnityCaptureFilter32.dll...
-regsvr32.exe /s "%~dp0UnityCaptureFilter32.dll"
+echo [1/2] Registrando filtros DirectShow (UnityCapture)...
+if exist "%~dp0UnityCaptureFilter32.dll" regsvr32.exe /s "%~dp0UnityCaptureFilter32.dll"
+if exist "%~dp0UnityCaptureFilter64.dll" regsvr32.exe /s "%~dp0UnityCaptureFilter64.dll"
 
-echo Registrando UnityCaptureFilter64.dll...
-regsvr32.exe /s "%~dp0UnityCaptureFilter64.dll"
+echo [2/2] Registrando driver nativo Windows 11 (DroidLensMF.dll)...
+if exist "%~dp0DroidLensMF.dll" (
+    regsvr32.exe /s "%~dp0DroidLensMF.dll"
+)
 
 if %errorlevel% equ 0 (
     echo.
     echo ===================================================
-    echo  [OK] Driver instalado y registrado con exito!
-    echo  Dispositivo disponible: Unity Video Capture
+    echo  [OK] Drivers instalados y registrados con exito!
+    echo  - Windows 11 Nativo: DroidLens Virtual Camera
+    echo  - DirectShow:        Unity Video Capture
     echo ===================================================
 ) else (
     echo.
     echo [ERROR] Hubo un problema al registrar las DLL.
 )
 
-echo.
-pause
+if "%1" neq "--silent" (
+    echo.
+    pause
+)
