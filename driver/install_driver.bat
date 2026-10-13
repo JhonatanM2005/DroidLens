@@ -21,6 +21,7 @@ if exist "%~dp0UnityCaptureFilter64.dll" regsvr32.exe /s "%~dp0UnityCaptureFilte
 
 echo [2/2] Registrando driver nativo Windows 11 (DroidLensMF.dll)...
 if exist "%~dp0DroidLensMF.dll" (
+    net stop FrameServer /y >nul 2>&1
     if not exist "%ProgramData%\DroidLens" mkdir "%ProgramData%\DroidLens"
     copy /Y "%~dp0DroidLensMF.dll" "%ProgramData%\DroidLens\DroidLensMF.dll" >nul 2>&1
     icacls "%ProgramData%\DroidLens" /grant "*S-1-1-0:(OI)(CI)(RX)" "*S-1-5-19:(OI)(CI)(RX)" "*S-1-15-2-1:(OI)(CI)(RX)" >nul 2>&1

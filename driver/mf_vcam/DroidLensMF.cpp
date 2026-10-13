@@ -15,12 +15,15 @@
 #include <shlwapi.h>
 #include <sddl.h>
 #include <aclapi.h>
+#include <winsvc.h>
 #include <ks.h>
 #include <ksproxy.h>
 #include <ksmedia.h>
 #include <propvarutil.h>
 #include <strsafe.h>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -42,8 +45,48 @@ static const GUID CLSID_DroidLensMediaSource = {
 static const wchar_t* kClsidString = L"{D819C48B-A324-4B2D-9B8A-7012354A0002}";
 static const wchar_t* kFriendlyName = L"DroidLens Virtual Camera";
 static const wchar_t* kSharedFilePath = L"C:\\Users\\Public\\DroidLens_MF_SharedVideo.shm";
+static const wchar_t* kTraceFilePath = L"C:\\Users\\Public\\DroidLens_MF_Trace.log";
 static const wchar_t* kGlobalDllDir = L"C:\\ProgramData\\DroidLens";
 static const wchar_t* kGlobalDllPath = L"C:\\ProgramData\\DroidLens\\DroidLensMF.dll";
+
+static void TraceLog(const char* fmt, ...) {
+    HANDLE hFile = CreateFileW(
+        kTraceFilePath,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    char buf[1024] = {};
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    int prefixLen = snprintf(
+        buf, sizeof(buf),
+        "[%02u:%02u:%02u.%03u][PID:%lu][TID:%lu] ",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+        GetCurrentProcessId(), GetCurrentThreadId()
+    );
+    if (prefixLen < 0) prefixLen = 0;
+
+    va_list args;
+    va_start(args, fmt);
+    int bodyLen = vsnprintf(buf + prefixLen, sizeof(buf) - prefixLen - 2, fmt, args);
+    va_end(args);
+    if (bodyLen < 0) bodyLen = 0;
+
+    size_t total = static_cast<size_t>(prefixLen + bodyLen);
+    if (total + 2 < sizeof(buf)) {
+        buf[total++] = '\r';
+        buf[total++] = '\n';
+    }
+    DWORD written = 0;
+    WriteFile(hFile, buf, static_cast<DWORD>(total), &written, nullptr);
+    CloseHandle(hFile);
+}
 
 // Ensure forward-compatible definitions if compiling against an older Windows SDK header
 #ifndef __IMFVirtualCamera_INTERFACE_DEFINED__
@@ -340,6 +383,7 @@ public:
         nv12Type->Release();
 
         m_hMap = OpenSharedMemoryFile(false, &m_mapView, nullptr);
+        TraceLog("MediaStream::Initialize hr=0x%08lX", hr);
         return hr;
     }
 
@@ -491,6 +535,7 @@ public:
 
     // IMFMediaStream2
     STDMETHODIMP SetStreamState(MF_STREAM_STATE value) override {
+        TraceLog("MediaStream::SetStreamState current=%d new=%d", m_state, value);
         if (m_state == value) return S_OK;
         switch (value) {
         case MF_STREAM_STATE_PAUSED:
@@ -540,6 +585,7 @@ public:
         if (SUCCEEDED(hr)) {
             m_state = MF_STREAM_STATE_RUNNING;
         }
+        TraceLog("MediaStream::Start hr=0x%08lX", hr);
         return hr;
     }
 
@@ -551,6 +597,7 @@ public:
         }
         HRESULT hr = m_eventQueue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
         m_state = MF_STREAM_STATE_STOPPED;
+        TraceLog("MediaStream::Stop hr=0x%08lX", hr);
         return hr;
     }
 
@@ -565,16 +612,19 @@ public:
             m_allocator->Release();
             m_allocator = nullptr;
         }
-        return pAllocator->QueryInterface(IID_PPV_ARGS(&m_allocator));
+        HRESULT hr = pAllocator->QueryInterface(IID_PPV_ARGS(&m_allocator));
+        TraceLog("MediaStream::SetAllocator hr=0x%08lX", hr);
+        return hr;
     }
 
     HRESULT SetD3DManager(IUnknown* pManager) {
-        // Intentionally do not bind D3DManager to m_allocator so samples remain CPU-lockable (2D buffers)
+        TraceLog("MediaStream::SetD3DManager pManager=%p (CPU mode forced)", pManager);
         return S_OK;
     }
 
     void Shutdown() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        TraceLog("MediaStream::Shutdown");
         if (m_eventQueue) {
             m_eventQueue->Shutdown();
             m_eventQueue->Release();
@@ -660,7 +710,6 @@ private:
             if (srcBgra) {
                 ConvertRGB32ToNV12(srcBgra, srcStride, m_width, m_height, pDst, dstPitch);
             } else {
-                // Dark slate standby pattern in NV12 (Y=22, U=129, V=126)
                 for (UINT y = 0; y < m_height; ++y) {
                     std::memset(pDst + y * dstPitch, 22, m_width);
                 }
@@ -729,6 +778,10 @@ public:
         g_dllRefCount.fetch_sub(1);
     }
 
+    bool IsShutdown() const {
+        return m_eventQueue == nullptr;
+    }
+
     HRESULT Initialize(IMFAttributes* pActivateAttrs) {
         HRESULT hr = MFCreateAttributes(&m_sourceAttrs, 8);
         if (FAILED(hr)) return hr;
@@ -769,7 +822,9 @@ public:
         pSD->Release();
         if (FAILED(hr)) return hr;
 
-        return MFCreateEventQueue(&m_eventQueue);
+        hr = MFCreateEventQueue(&m_eventQueue);
+        TraceLog("MediaSource::Initialize hr=0x%08lX", hr);
+        return hr;
     }
 
     // IUnknown
@@ -888,15 +943,23 @@ public:
         if (!ppPresentationDescriptor) return E_POINTER;
         *ppPresentationDescriptor = nullptr;
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_pd) return MF_E_SHUTDOWN;
-        return m_pd->Clone(ppPresentationDescriptor);
+        if (!m_pd) {
+            TraceLog("MediaSource::CreatePresentationDescriptor FAILED MF_E_SHUTDOWN");
+            return MF_E_SHUTDOWN;
+        }
+        HRESULT hr = m_pd->Clone(ppPresentationDescriptor);
+        TraceLog("MediaSource::CreatePresentationDescriptor hr=0x%08lX", hr);
+        return hr;
     }
 
     STDMETHODIMP Start(IMFPresentationDescriptor* pPresentationDescriptor, const GUID* pguidTimeFormat, const PROPVARIANT* pvarStartPosition) override {
         if (!pPresentationDescriptor || !pvarStartPosition) return E_POINTER;
         if (pguidTimeFormat && *pguidTimeFormat != GUID_NULL) return E_INVALIDARG;
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_eventQueue || !m_pd || !m_stream) return MF_E_SHUTDOWN;
+        if (!m_eventQueue || !m_pd || !m_stream) {
+            TraceLog("MediaSource::Start FAILED MF_E_SHUTDOWN");
+            return MF_E_SHUTDOWN;
+        }
 
         DWORD count = 0;
         HRESULT hr = pPresentationDescriptor->GetStreamDescriptorCount(&count);
@@ -946,7 +1009,9 @@ public:
         desc->Release();
         if (FAILED(hr)) return hr;
 
-        return m_eventQueue->QueueEventParamVar(MESourceStarted, GUID_NULL, S_OK, &pvTime);
+        hr = m_eventQueue->QueueEventParamVar(MESourceStarted, GUID_NULL, S_OK, &pvTime);
+        TraceLog("MediaSource::Start complete hr=0x%08lX", hr);
+        return hr;
     }
 
     STDMETHODIMP Stop() override {
@@ -960,13 +1025,16 @@ public:
 
         m_stream->Stop();
         m_pd->DeselectStream(0);
-        return m_eventQueue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, &pvTime);
+        HRESULT hr = m_eventQueue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, &pvTime);
+        TraceLog("MediaSource::Stop hr=0x%08lX", hr);
+        return hr;
     }
 
     STDMETHODIMP Pause() override { return MF_E_INVALID_STATE_TRANSITION; }
 
     STDMETHODIMP Shutdown() override {
         std::lock_guard<std::mutex> lock(m_mutex);
+        TraceLog("MediaSource::Shutdown called");
         if (!m_eventQueue) return MF_E_SHUTDOWN;
         m_eventQueue->Shutdown();
         m_eventQueue->Release();
@@ -1062,8 +1130,7 @@ public:
     }
 
     virtual ~DroidLensActivate() {
-        // IMPORTANT: Do NOT call m_source->Shutdown() here!
-        // FrameServer releases IMFActivate while continuing to hold and use IMFMediaSource.
+        TraceLog("DroidLensActivate::~DroidLensActivate");
         if (m_source) {
             m_source->Release();
             m_source = nullptr;
@@ -1112,7 +1179,12 @@ public:
         if (!ppv) return E_POINTER;
         *ppv = nullptr;
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_source) {
+        if (!m_source || m_source->IsShutdown()) {
+            if (m_source) {
+                TraceLog("DroidLensActivate::ActivateObject recreating shut-down m_source");
+                m_source->Release();
+                m_source = nullptr;
+            }
             m_source = new DroidLensMediaSource();
             HRESULT hr = m_source->Initialize(this);
             if (FAILED(hr)) {
@@ -1121,16 +1193,19 @@ public:
                 return hr;
             }
         }
-        return m_source->QueryInterface(riid, ppv);
+        HRESULT hr = m_source->QueryInterface(riid, ppv);
+        TraceLog("DroidLensActivate::ActivateObject hr=0x%08lX", hr);
+        return hr;
     }
 
     STDMETHODIMP ShutdownObject() override {
-        // Intentionally no-op per VCamSample reference: FrameServer manages MediaSource lifecycle directly
+        TraceLog("DroidLensActivate::ShutdownObject (no-op)");
         return S_OK;
     }
 
     STDMETHODIMP DetachObject() override {
         std::lock_guard<std::mutex> lock(m_mutex);
+        TraceLog("DroidLensActivate::DetachObject");
         if (m_source) {
             m_source->Release();
             m_source = nullptr;
@@ -1216,6 +1291,7 @@ public:
             hr = act->QueryInterface(riid, ppv);
         }
         act->Release();
+        TraceLog("ClassFactory::CreateInstance hr=0x%08lX", hr);
         return hr;
     }
 
@@ -1243,6 +1319,25 @@ static PFN_MFCreateVirtualCamera ResolveMFCreateVirtualCamera() {
     HMODULE hMod = LoadLibraryW(L"mfsensorgroup.dll");
     if (!hMod) return nullptr;
     return reinterpret_cast<PFN_MFCreateVirtualCamera>(GetProcAddress(hMod, "MFCreateVirtualCamera"));
+}
+
+static void StopFrameServerService() {
+    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!hSCM) return;
+    SC_HANDLE hSvc = OpenServiceW(hSCM, L"FrameServer", SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (hSvc) {
+        SERVICE_STATUS status{};
+        if (ControlService(hSvc, SERVICE_CONTROL_STOP, &status)) {
+            for (int i = 0; i < 25; ++i) {
+                if (!QueryServiceStatus(hSvc, &status) || status.dwCurrentState == SERVICE_STOPPED) {
+                    break;
+                }
+                Sleep(100);
+            }
+        }
+        CloseServiceHandle(hSvc);
+    }
+    CloseServiceHandle(hSCM);
 }
 
 static void GrantReadExecutePermissions(LPCWSTR path) {
@@ -1296,7 +1391,7 @@ int __stdcall dl_mf_start(int width, int height, int fps) {
 
     PFN_MFCreateVirtualCamera pfnCreate = ResolveMFCreateVirtualCamera();
     if (!pfnCreate) {
-        g_lastHr.store( static_cast<long>(E_NOTIMPL) );
+        g_lastHr.store(static_cast<long>(E_NOTIMPL));
         return 0;
     }
 
@@ -1334,6 +1429,7 @@ int __stdcall dl_mf_start(int width, int height, int fps) {
         0,
         &g_pVirtualCam
     );
+    TraceLog("dl_mf_start MFCreateVirtualCamera hr=0x%08lX", hr);
     if (FAILED(hr) || !g_pVirtualCam) {
         g_lastHr.store(hr);
         UnmapViewOfFile(g_pSharedView);
@@ -1344,6 +1440,7 @@ int __stdcall dl_mf_start(int width, int height, int fps) {
     }
 
     hr = g_pVirtualCam->Start(nullptr);
+    TraceLog("dl_mf_start g_pVirtualCam->Start hr=0x%08lX", hr);
     if (FAILED(hr)) {
         g_lastHr.store(hr);
         g_pVirtualCam->Release();
@@ -1412,6 +1509,7 @@ void __stdcall dl_mf_stop(void) {
 // Standard COM DLL Entry Points
 // ============================================================================
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv) {
+    TraceLog("DllGetClassObject called");
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
     if (rclsid != CLSID_DroidLensMediaSource) return CLASS_E_CLASSNOTAVAILABLE;
@@ -1431,6 +1529,9 @@ STDAPI DllRegisterServer(void) {
     if (!GetModuleFileNameW(g_hModule, modulePath, MAX_PATH)) {
         return HRESULT_FROM_WIN32(GetLastError());
     }
+
+    // Stop FrameServer first so any previously cached in-memory DLL is unloaded cleanly
+    StopFrameServerService();
 
     // Copy DLL to C:\ProgramData\DroidLens\DroidLensMF.dll so Windows FrameServer
     // (running as NT AUTHORITY\LOCAL SERVICE in Session 0) can always load it
@@ -1475,10 +1576,12 @@ STDAPI DllRegisterServer(void) {
     RegSetValueExW(hKey, L"ThreadingModel", 0, REG_SZ, reinterpret_cast<const BYTE*>(threading),
                    static_cast<DWORD>((wcslen(threading) + 1) * sizeof(wchar_t)));
     RegCloseKey(hKey);
+    TraceLog("DllRegisterServer registered '%ls'", registeredPath);
     return S_OK;
 }
 
 STDAPI DllUnregisterServer(void) {
+    StopFrameServerService();
     wchar_t keyPath[256] = {};
     StringCchPrintfW(keyPath, 256, L"SOFTWARE\\Classes\\CLSID\\%s", kClsidString);
     SHDeleteKeyW(HKEY_LOCAL_MACHINE, keyPath);
@@ -1492,6 +1595,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         g_hModule = hModule;
         DisableThreadLibraryCalls(hModule);
+        TraceLog("DllMain DLL_PROCESS_ATTACH");
     }
     return TRUE;
 }
