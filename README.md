@@ -2,9 +2,9 @@
 
 > Convierte tu celular Android en una webcam de alta definición para Windows por cable USB con latencia ultra baja (15 a 35 ms típica), sin necesidad de OBS Studio ni software pesado de terceros.
 
-[![Descargar APK](https://img.shields.io/badge/Descargar%20APK-v1.0.0-orange?style=for-the-badge&logo=android)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens.apk)
-[![Instalador Windows](https://img.shields.io/badge/Instalador%20Windows-v1.0.0-blue?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Setup-v1.0.0.exe)
-[![Portable Windows](https://img.shields.io/badge/Portable%20Windows-v1.0.0-lightgrey?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Windows-Portable-v1.0.0.zip)
+[![Descargar APK](https://img.shields.io/badge/Descargar%20APK-v1.1.0-orange?style=for-the-badge&logo=android)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.1.0/DroidLens.apk)
+[![Instalador Windows](https://img.shields.io/badge/Instalador%20Windows-v1.1.0-blue?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.1.0/DroidLens-Setup-v1.1.0.exe)
+[![Portable Windows](https://img.shields.io/badge/Portable%20Windows-v1.1.0-lightgrey?style=for-the-badge&logo=windows)](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.1.0/DroidLens-Windows-Portable-v1.1.0.zip)
 [![GitHub Release](https://img.shields.io/github/v/release/JhonatanM2005/DroidLens?style=for-the-badge)](https://github.com/JhonatanM2005/DroidLens/releases)
 [![CI Build](https://github.com/JhonatanM2005/DroidLens/actions/workflows/ci.yml/badge.svg)](https://github.com/JhonatanM2005/DroidLens/actions/workflows/ci.yml)
 
@@ -18,9 +18,11 @@
   - Selección de dispositivo objetivo en PC cuando hay múltiples teléfonos o emuladores conectados.
   - Comandos globales (`devices`, `version`, `kill-server`) protegidos para no heredar seriales persistidos.
   - Limpieza automática de reglas de reenvío al cerrar la aplicación.
-- **Driver DirectShow Independiente:**
-  - Filtro DirectShow `UnityCapture` registrado de forma nativa en Windows.
-  - Reconocido directamente por Zoom, Google Meet, Microsoft Teams, Discord, Skype, OBS Studio y navegadores web (Chrome, Edge, Firefox).
+- **Doble Motor de Cámara Virtual (Windows 11 `IMFVirtualCamera` + DirectShow `UnityCapture`):**
+  - **Motor Nativo Windows 11 (`DroidLensMF.dll`):** Basado en `IMFVirtualCamera` y `IMFMediaSourceEx` sobre memoria compartida (`Local\DroidLens_MF_SharedVideo`), exponiendo **`"DroidLens Virtual Camera"`** en la app Cámara de Windows 11, Microsoft Teams, Zoom, Google Meet, Discord y navegadores modernos.
+  - **Motor DirectShow Clásico (`UnityCapture`):** Compatible con Windows 10/11 y aplicaciones DirectShow heredadas, seleccionable desde la interfaz gráfica.
+- **Modo Segundo Plano en Bandeja del Sistema (System Tray):**
+  - Al minimizar o pulsar la `X`, DroidLens se oculta en la bandeja del sistema (junto al reloj), desaparece de la barra de tareas para evitar cierres accidentales y pausa el renderizado visual de Tkinter para ahorrar CPU mientras el video y el micrófono continúan activos.
 - **Recuperación Inmediata ante Desconexión (<250 ms):**
   - Contrato de recepción reactivo (`NEW_FRAME`, `STALE_CACHED`, `EXPIRED_OR_DISCONNECTED`).
   - Si el cable se desconecta o la señal se interrumpe por más de 250 ms, la aplicación cambia instantáneamente a la pantalla de standby animada sin congelar la imagen ni desconectar la videollamada.
