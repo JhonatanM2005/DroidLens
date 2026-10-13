@@ -21,7 +21,12 @@ try:
     from core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from core.receiver import StreamReceiver, FrameStatus
     from core.processor import FrameProcessor
-    from core.virtual_camera import VirtualCameraManager
+    from core.virtual_camera import (
+        VirtualCameraManager,
+        VirtualCamBackend,
+        VCAM_BACKEND_LABELS,
+        LABEL_TO_VCAM_BACKEND,
+    )
     from core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from adb.adb_manager import ADBManager
     from ui.tray_manager import TrayManager
@@ -30,7 +35,12 @@ except ImportError:
     from ..core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from ..core.receiver import StreamReceiver, FrameStatus
     from ..core.processor import FrameProcessor
-    from ..core.virtual_camera import VirtualCameraManager
+    from ..core.virtual_camera import (
+        VirtualCameraManager,
+        VirtualCamBackend,
+        VCAM_BACKEND_LABELS,
+        LABEL_TO_VCAM_BACKEND,
+    )
     from ..core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from ..adb.adb_manager import ADBManager
     from .tray_manager import TrayManager
@@ -85,7 +95,18 @@ class DroidLensApp(ctk.CTk):
         self.processor.flip_horizontal = self.settings.get("mirror", True)
         self.processor.show_diagnostic_overlay = self.settings.get("overlay", False)
 
-        self.vcam = VirtualCameraManager(width=initial_w, height=initial_h, fps=initial_fps)
+        saved_backend_label = self.settings.get(
+            "vcam_backend", VCAM_BACKEND_LABELS[VirtualCamBackend.WINDOWS_MF]
+        )
+        initial_backend = LABEL_TO_VCAM_BACKEND.get(
+            saved_backend_label, VirtualCamBackend.WINDOWS_MF
+        )
+        self.vcam = VirtualCameraManager(
+            width=initial_w,
+            height=initial_h,
+            fps=initial_fps,
+            backend=initial_backend,
+        )
         self._pending_vcam_resolution: Optional[Tuple[int, int, int]] = None
 
         self.is_running = True
@@ -140,6 +161,7 @@ class DroidLensApp(ctk.CTk):
             "stream_mode": STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO],
             "audio_output_device": None,
             "close_to_tray": True,
+            "vcam_backend": VCAM_BACKEND_LABELS[VirtualCamBackend.WINDOWS_MF],
         }
         settings_file = get_settings_file()
         if os.path.exists(settings_file):
@@ -289,7 +311,27 @@ class DroidLensApp(ctk.CTk):
 
         self._add_separator()
 
-        # Switch de Cámara Virtual
+        # Motor y Switch de Cámara Virtual
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Motor de Cámara Virtual",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(4, 2), padx=12, anchor="w")
+
+        backend_values = [
+            VCAM_BACKEND_LABELS[VirtualCamBackend.WINDOWS_MF],
+            VCAM_BACKEND_LABELS[VirtualCamBackend.UNITY_CAPTURE],
+        ]
+        self.vcam_backend_menu = ctk.CTkOptionMenu(
+            self.controls_frame,
+            values=backend_values,
+            command=self._on_vcam_backend_selected,
+        )
+        self.vcam_backend_menu.set(
+            VCAM_BACKEND_LABELS.get(self.vcam.backend, backend_values[0])
+        )
+        self.vcam_backend_menu.pack(fill="x", padx=12, pady=4)
+
         self.vcam_switch = ctk.CTkSwitch(
             self.controls_frame,
             text="Cámara Virtual",
@@ -301,12 +343,23 @@ class DroidLensApp(ctk.CTk):
 
         self.vcam_desc = ctk.CTkLabel(
             self.controls_frame,
-            text="Dispositivo: Unity Video Capture\nCompatible con Zoom, Meet, Teams, Discord.",
+            text=f"Dispositivo: {self.vcam.device_name}\nCompatible con Windows 11, Zoom, Meet, Teams, Discord.",
             font=ctk.CTkFont(size=11),
             text_color="#888888",
+            wraplength=280,
             justify="left"
         )
-        self.vcam_desc.pack(pady=(0, 10), padx=12, anchor="w")
+        self.vcam_desc.pack(pady=(0, 6), padx=12, anchor="w")
+
+        self.btn_install_driver = ctk.CTkButton(
+            self.controls_frame,
+            text="📥 Registrar Driver de Cámara (Admin)",
+            command=self._install_vcam_driver_async,
+            fg_color="#8A5A00",
+            hover_color="#A86E00",
+            height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
 
         self._add_separator()
 
@@ -543,6 +596,54 @@ class DroidLensApp(ctk.CTk):
         sep.set(1.0)
         sep.pack(fill="x", padx=12, pady=8)
 
+    def _on_vcam_backend_selected(self, label: str):
+        backend = LABEL_TO_VCAM_BACKEND.get(label, VirtualCamBackend.WINDOWS_MF)
+        self.settings["vcam_backend"] = label
+        self._save_settings()
+
+        if self.vcam.set_backend(backend):
+            self.btn_install_driver.pack_forget()
+            if self.is_vcam_enabled and self.vcam.is_active:
+                self.vcam_desc.configure(
+                    text=f"Cámara Virtual ACTIVA.\nSelecciona '{self.vcam.device_name}' en tu app.",
+                    text_color="#00E676",
+                )
+            else:
+                self.vcam_desc.configure(
+                    text=f"Dispositivo: {self.vcam.device_name}\nCompatible con Windows 11, Zoom, Meet, Teams, Discord.",
+                    text_color="#888888",
+                )
+        else:
+            self.vcam_switch.deselect()
+            self.is_vcam_enabled = False
+            self.vcam_desc.configure(
+                text=self.vcam.last_error or "Error al cambiar el motor de cámara virtual.",
+                text_color="#FF5252",
+            )
+            self.btn_install_driver.pack(fill="x", padx=12, pady=(2, 8), after=self.vcam_desc)
+
+    def _install_vcam_driver_async(self):
+        self.btn_install_driver.configure(state="disabled", text="⏳ Registrando Driver...")
+
+        def _task():
+            script_path = find_driver_script("install_driver.bat")
+            try:
+                if script_path:
+                    subprocess.run(["cmd.exe", "/c", script_path], check=False)
+            except Exception:
+                pass
+            self.after(0, self._refresh_vcam_ui_after_install)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _refresh_vcam_ui_after_install(self):
+        self.btn_install_driver.configure(state="normal", text="📥 Registrar Driver de Cámara (Admin)")
+        self.btn_install_driver.pack_forget()
+        self.vcam_desc.configure(
+            text=f"✓ Driver registrado. Activa el switch de '{self.vcam.device_name}'.",
+            text_color="#00E676",
+        )
+
     def _toggle_vcam(self):
         self.is_vcam_enabled = self.vcam_switch.get()
         if self.is_vcam_enabled:
@@ -557,17 +658,23 @@ class DroidLensApp(ctk.CTk):
                 self.vcam_switch.deselect()
                 self.is_vcam_enabled = False
                 self.vcam_desc.configure(
-                    text="Error al iniciar cámara virtual.\n¿Ejecutaste driver\\install_driver.bat?",
+                    text=self.vcam.last_error or "Error al iniciar cámara virtual.\n¿Ejecutaste driver\\install_driver.bat?",
                     text_color="#FF5252"
                 )
+                self.btn_install_driver.pack(fill="x", padx=12, pady=(2, 8), after=self.vcam_desc)
             else:
+                self.btn_install_driver.pack_forget()
                 self.vcam_desc.configure(
-                    text="Cámara Virtual ACTIVA.\nSelecciona 'Unity Video Capture' en tu app.",
+                    text=f"Cámara Virtual ACTIVA.\nSelecciona '{self.vcam.device_name}' en tu app.",
                     text_color="#00E676"
                 )
         else:
             self.vcam.stop()
-            self.vcam_desc.configure(text="Cámara Virtual DETENIDA.", text_color="#888888")
+            self.btn_install_driver.pack_forget()
+            self.vcam_desc.configure(
+                text=f"Cámara Virtual DETENIDA ({self.vcam.device_name}).",
+                text_color="#888888"
+            )
             if self._pending_vcam_resolution:
                 pw, ph, pfps = self._pending_vcam_resolution
                 self.vcam.update_resolution(pw, ph, pfps)
