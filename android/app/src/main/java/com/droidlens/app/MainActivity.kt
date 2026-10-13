@@ -19,6 +19,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.droidlens.app.camera.StreamMode
 import com.droidlens.app.camera.VideoProfile
 import com.droidlens.app.databinding.ActivityMainBinding
 import com.droidlens.app.service.CamStreamService
@@ -33,10 +34,11 @@ class MainActivity : AppCompatActivity() {
     private var isBound = false
     private var isDarkModeActive = false
 
-    private val requestCameraPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
+    private val requestMediaPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val cameraGranted = permissions[Manifest.permission.CAMERA] == true || hasCameraPermission()
+        if (cameraGranted) {
             bindStreamService()
         } else {
             Toast.makeText(this, R.string.camera_permission_required, Toast.LENGTH_LONG).show()
@@ -69,6 +71,14 @@ class MainActivity : AppCompatActivity() {
                 service.cameraManager.setProfile(initialProfile)
                 binding.btnResolution.text = initialProfile.title
 
+                // Restaurar modo de transmisión guardado
+                val savedModeName = prefs.getString(KEY_STREAM_MODE, StreamMode.AUDIO_VIDEO.name)
+                val initialMode = try {
+                    StreamMode.valueOf(savedModeName ?: StreamMode.AUDIO_VIDEO.name)
+                } catch (e: Exception) {
+                    StreamMode.AUDIO_VIDEO
+                }
+
                 // Vincular callbacks de estado
                 service.onStatusChanged = { streaming, _ ->
                     runOnUiThread {
@@ -94,6 +104,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                service.onModeChanged = { activeMode ->
+                    runOnUiThread {
+                        binding.btnStreamMode.text = "Modo: ${activeMode.title}"
+                        prefs.edit().putString(KEY_STREAM_MODE, activeMode.name).apply()
+                    }
+                }
+
                 service.cameraManager.errorListener = object : com.droidlens.app.camera.CameraManager.CameraErrorListener {
                     override fun onCameraError(message: String, throwable: Throwable?) {
                         runOnUiThread {
@@ -104,6 +121,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                service.setStreamMode(initialMode, notifyRemote = false)
                 updateStreamingUI(service.isStreaming.get())
                 updateFlashButtonState()
 
@@ -138,10 +156,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (hasCameraPermission()) {
+        if (hasCameraPermission() && hasAudioPermission()) {
             bindStreamService()
         } else {
-            requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            requestMediaPermissionsLauncher.launch(
+                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+            )
         }
     }
 
@@ -149,9 +169,12 @@ class MainActivity : AppCompatActivity() {
         this, Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
 
+    private fun hasAudioPermission() = ContextCompat.checkSelfPermission(
+        this, Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
+
     private fun bindStreamService() {
         val intent = Intent(this, CamStreamService::class.java)
-        // Iniciar servicio explícitamente para que persista fuera del ciclo de vida de la actividad
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
@@ -162,6 +185,21 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun setupUI() {
+        binding.btnStreamMode.setOnClickListener {
+            val service = streamService ?: return@setOnClickListener
+            val targetMode = service.currentMode.next()
+            if (targetMode != StreamMode.VIDEO_ONLY && !hasAudioPermission()) {
+                Toast.makeText(
+                    this,
+                    "Permiso de micrófono requerido; usando Solo Cámara",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            val applied = service.setStreamMode(targetMode, notifyRemote = true)
+            binding.btnStreamMode.text = "Modo: ${applied.title}"
+            prefs.edit().putString(KEY_STREAM_MODE, applied.name).apply()
+        }
+
         binding.btnToggleStream.setOnClickListener {
             val service = streamService ?: return@setOnClickListener
             if (service.isStreaming.get()) {
@@ -261,13 +299,11 @@ class MainActivity : AppCompatActivity() {
             unbindService(serviceConnection)
             isBound = false
         }
-        // Nota crítica de Bloque 2: No se detiene el streamService aquí.
-        // La transmisión continúa en segundo plano con WakeLock hasta que
-        // el usuario pulse 'Detener' en la app o en la notificación persistente.
     }
 
     companion object {
         private const val PREFS_NAME = "droidlens_prefs"
         private const val KEY_VIDEO_PROFILE = "video_profile"
+        private const val KEY_STREAM_MODE = "stream_mode"
     }
 }

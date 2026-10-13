@@ -1,18 +1,23 @@
 package com.droidlens.app.service
 
+import android.Manifest
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import com.droidlens.app.MainActivity
 import com.droidlens.app.R
+import com.droidlens.app.audio.AudioCaptureManager
 import com.droidlens.app.camera.CameraManager
-import com.droidlens.app.camera.VideoProfile
+import com.droidlens.app.camera.StreamMode
 import com.droidlens.app.network.StreamServer
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -27,15 +32,20 @@ class CamStreamService : LifecycleService() {
 
     lateinit var cameraManager: CameraManager
         private set
+    lateinit var audioCaptureManager: AudioCaptureManager
+        private set
     lateinit var streamServer: StreamServer
         private set
 
     val isStreaming = AtomicBoolean(false)
+    var currentMode: StreamMode = StreamMode.AUDIO_VIDEO
+        private set
 
     // Callbacks para la actividad si está enlazada
     var onStatusChanged: ((Boolean, String) -> Unit)? = null
     var onFpsUpdated: ((Float) -> Unit)? = null
     var onClientStateChanged: ((Boolean, String) -> Unit)? = null
+    var onModeChanged: ((StreamMode) -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -46,7 +56,8 @@ class CamStreamService : LifecycleService() {
         streamServer.callback = object : StreamServer.ServerCallback {
             override fun onClientConnected(clientAddress: String) {
                 onClientStateChanged?.invoke(true, clientAddress)
-                updateNotification("PC conectada ($clientAddress)")
+                streamServer.sendControlMode(currentMode)
+                updateNotification("PC conectada ($clientAddress) — ${currentMode.title}")
             }
 
             override fun onClientDisconnected() {
@@ -60,6 +71,10 @@ class CamStreamService : LifecycleService() {
                 onFpsUpdated?.invoke(fps)
             }
 
+            override fun onRemoteModeChanged(mode: StreamMode) {
+                setStreamMode(mode, notifyRemote = false)
+            }
+
             override fun onError(message: String) {
                 // Informar error
             }
@@ -70,12 +85,19 @@ class CamStreamService : LifecycleService() {
         cameraManager = CameraManager(this, this)
         cameraManager.frameListener = object : CameraManager.FrameListener {
             override fun onFrameCaptured(jpegBytes: ByteArray) {
-                if (isStreaming.get()) {
+                if (isStreaming.get() && currentMode != StreamMode.AUDIO_ONLY) {
                     streamServer.sendFrame(jpegBytes)
                 }
             }
         }
         cameraManager.startCamera()
+
+        // 3. Inicializar AudioCaptureManager
+        audioCaptureManager = AudioCaptureManager { pcmBytes ->
+            if (isStreaming.get() && currentMode != StreamMode.VIDEO_ONLY) {
+                streamServer.sendAudio(pcmBytes)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +114,60 @@ class CamStreamService : LifecycleService() {
         return binder
     }
 
+    private fun hasAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Cambia en caliente el modo de transmisión, encendiendo/apagando cámara y micrófono según corresponda.
+     */
+    fun setStreamMode(requestedMode: StreamMode, notifyRemote: Boolean = true): StreamMode {
+        val effectiveMode = if (requestedMode != StreamMode.VIDEO_ONLY && !hasAudioPermission()) {
+            StreamMode.VIDEO_ONLY
+        } else {
+            requestedMode
+        }
+
+        currentMode = effectiveMode
+        if (isStreaming.get()) {
+            applyModeToHardware(effectiveMode)
+            updateNotification("Transmitiendo: ${effectiveMode.title}")
+        }
+
+        if (notifyRemote) {
+            streamServer.sendControlMode(effectiveMode)
+        }
+        onModeChanged?.invoke(effectiveMode)
+        return effectiveMode
+    }
+
+    private fun applyModeToHardware(mode: StreamMode) {
+        when (mode) {
+            StreamMode.VIDEO_ONLY -> {
+                audioCaptureManager.stop()
+                cameraManager.isStreamingActive.set(true)
+                cameraManager.resumeCameraSensor()
+            }
+            StreamMode.AUDIO_ONLY -> {
+                cameraManager.isStreamingActive.set(false)
+                cameraManager.pauseCameraSensor()
+                if (hasAudioPermission()) {
+                    audioCaptureManager.start()
+                }
+            }
+            StreamMode.AUDIO_VIDEO -> {
+                cameraManager.isStreamingActive.set(true)
+                cameraManager.resumeCameraSensor()
+                if (hasAudioPermission()) {
+                    audioCaptureManager.start()
+                }
+            }
+        }
+    }
+
     /**
      * Inicia formalmente la sesión de streaming, adquiere WakeLock y levanta ForegroundService.
      */
@@ -99,12 +175,27 @@ class CamStreamService : LifecycleService() {
         if (isStreaming.getAndSet(true)) return true
 
         acquireWakeLock()
-        cameraManager.isStreamingActive.set(true)
 
-        val notification = buildNotification("Transmitiendo video a la PC por USB (:8080)")
-        startForeground(NOTIFICATION_ID, notification)
+        if (currentMode != StreamMode.VIDEO_ONLY && !hasAudioPermission()) {
+            currentMode = StreamMode.VIDEO_ONLY
+        }
+
+        val notification = buildNotification("Transmitiendo (${currentMode.title}) por USB (:8080)")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            var fgType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            if (hasAudioPermission()) {
+                fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, notification, fgType)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        applyModeToHardware(currentMode)
+        streamServer.sendControlMode(currentMode)
 
         onStatusChanged?.invoke(true, "Transmitiendo a PC")
+        onModeChanged?.invoke(currentMode)
         return true
     }
 
@@ -115,6 +206,7 @@ class CamStreamService : LifecycleService() {
         if (!isStreaming.getAndSet(false)) return
 
         cameraManager.isStreamingActive.set(false)
+        audioCaptureManager.stop()
         releaseWakeLock()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -133,7 +225,7 @@ class CamStreamService : LifecycleService() {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidLens:StreamingWakeLock").apply {
                 setReferenceCounted(false)
-                acquire(4 * 60 * 60 * 1000L) // 4 horas máximo de protección
+                acquire(4 * 60 * 60 * 1000L)
             }
         }
     }
@@ -171,7 +263,7 @@ class CamStreamService : LifecycleService() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("DroidLens Webcam Activa")
+            .setContentTitle("DroidLens Activo (${currentMode.title})")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_camera)
             .setContentIntent(pendingOpenIntent)
@@ -199,6 +291,9 @@ class CamStreamService : LifecycleService() {
     override fun onDestroy() {
         super.onDestroy()
         releaseWakeLock()
+        if (::audioCaptureManager.isInitialized) {
+            audioCaptureManager.stop()
+        }
         if (::cameraManager.isInitialized) {
             cameraManager.stop()
         }

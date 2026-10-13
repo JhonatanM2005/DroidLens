@@ -224,6 +224,27 @@ class CameraManager(
         }
     }
 
+    fun pauseCameraSensor() {
+        ContextCompat.getMainExecutor(context).execute {
+            try {
+                cameraProvider?.unbindAll()
+                camera = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error pausando sensor de cámara: ${e.message}")
+            }
+        }
+    }
+
+    fun resumeCameraSensor() {
+        ContextCompat.getMainExecutor(context).execute {
+            if (cameraProvider != null) {
+                bindCameraUseCases()
+            } else {
+                startCamera()
+            }
+        }
+    }
+
     fun stop() {
         cameraProvider?.unbindAll()
         cameraExecutor.shutdown()
