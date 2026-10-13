@@ -63,11 +63,16 @@ public:
     virtual HRESULT STDMETHODCALLTYPE Remove(void) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetMediaSource(IMFMediaSource** ppMediaSource) = 0;
     virtual HRESULT STDMETHODCALLTYPE SendCameraProperty(REFGUID propertySet, ULONG propertyId, ULONG propertyFlags, void* propertyPayload, ULONG propertyPayloadLength, void* data, ULONG dataLength, ULONG* dataWritten) = 0;
-    virtual HRESULT STDMETHODCALLTYPE CreateSyncEvent(REFGUID kseventSet, ULONG kseventId, ULONG kseventFlags, HANDLE eventHandle, IMFCameraSyncObject** cameraSyncObject) = 0;
-    virtual HRESULT STDMETHODCALLTYPE CreateSyncSemaphore(REFGUID kseventSet, ULONG kseventId, ULONG kseventFlags, HANDLE semaphoreHandle, LONG semaphoreAdjustment, IMFCameraSyncObject** cameraSyncObject) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateSyncEvent(REFGUID kseventSet, ULONG kseventId, ULONG kseventFlags, HANDLE eventHandle, IUnknown** cameraSyncObject) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateSyncSemaphore(REFGUID kseventSet, ULONG kseventId, ULONG kseventFlags, HANDLE semaphoreHandle, LONG semaphoreAdjustment, IUnknown** cameraSyncObject) = 0;
     virtual HRESULT STDMETHODCALLTYPE Shutdown(void) = 0;
 };
 #endif
+
+// PINNAME_VIDEO_CAPTURE: {FB6C4281-0353-11D1-905F-0000C0CC16BA}
+static const GUID kPINNAME_VIDEO_CAPTURE = {
+    0xfb6c4281, 0x0353, 0x11d1, {0x90, 0x5f, 0x00, 0x00, 0xc0, 0xcc, 0x16, 0xba}
+};
 
 // MF_DEVICESTREAM_ATTRIBUTE_FRAMESERVER_SHARED: {1CB3A8E9-B279-41D4-AF97-34A243E68320}
 static const GUID kMF_DEVICESTREAM_ATTRIBUTE_FRAMESERVER_SHARED = {
@@ -468,7 +473,7 @@ private:
             MFCreateAttributes(&m_streamAttrs, 4);
             if (m_streamAttrs) {
                 m_streamAttrs->SetUINT32(kMF_DEVICESTREAM_ATTRIBUTE_FRAMESERVER_SHARED, 1);
-                m_streamAttrs->SetGUID(MF_DEVICESTREAM_STREAM_CATEGORY, PINNAME_VIDEO_CAPTURE);
+                m_streamAttrs->SetGUID(MF_DEVICESTREAM_STREAM_CATEGORY, kPINNAME_VIDEO_CAPTURE);
                 m_streamAttrs->SetUINT32(MF_DEVICESTREAM_STREAM_ID, 0);
             }
             IMFStreamDescriptor* sds[1] = { pSD };
