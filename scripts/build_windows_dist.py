@@ -54,8 +54,8 @@ def build_distribution():
     # Copiar scripts de drivers dentro de la carpeta portable para comodidad
     app_dist_dir = os.path.join(dist_dir, "DroidLens")
     driver_dist = os.path.join(app_dist_dir, "driver")
-    if os.path.exists(os.path.join(repo_dir, "driver")) and not os.path.exists(driver_dist):
-        shutil.copytree(os.path.join(repo_dir, "driver"), driver_dist)
+    if os.path.exists(os.path.join(repo_dir, "driver")):
+        shutil.copytree(os.path.join(repo_dir, "driver"), driver_dist, dirs_exist_ok=True)
 
     # Crear ZIP de la versión portable
     zip_path = os.path.join(dist_dir, "DroidLens-Windows-Portable-v1.0.0.zip")

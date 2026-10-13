@@ -65,9 +65,10 @@ DroidLens/
 │   └── DroidLens/                        # Carpeta del ejecutable compilado (PyInstaller)
 │       └── DroidLens.exe                 # Binario principal de escritorio
 │
-├── driver/                      # Driver DirectShow independiente (UnityCapture)
-│   ├── install_driver.bat       # Registro del driver en Windows con permisos UAC
-│   ├── uninstall_driver.bat     # Desinstalación limpia del filtro
+├── driver/                      # Drivers de cámara DirectShow y micrófono virtual
+│   ├── install_driver.bat       # Registro del driver de cámara en Windows con permisos UAC
+│   ├── install_vbcable.bat      # Descarga e instalación automática de VB-Cable (micrófono virtual)
+│   ├── uninstall_driver.bat     # Desinstalación limpia del filtro de cámara
 │   ├── UnityCaptureFilter64.dll # Filtro de vídeo 64 bits
 │   └── UnityCaptureFilter32.dll # Filtro de vídeo 32 bits
 │
@@ -155,7 +156,7 @@ DroidLens ofrece dos opciones de distribución oficiales para Windows (descargab
 
 1. **Instalador Wizard ([`DroidLens-Setup-v1.0.0.exe`](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Setup-v1.0.0.exe)):**
    - Instalación per-user sin requerir permisos de administrador para la app.
-   - Opción durante la instalación para registrar el driver DirectShow con elevación UAC.
+   - Opciones durante la instalación para registrar el driver de cámara DirectShow (`UnityCapture`) e instalar el driver de micrófono virtual (`VB-Cable`) con elevación UAC.
    - Crea accesos directos en el Menú Inicio y Escritorio con desinstalador limpio.
 2. **Ejecutable Portable ([`DroidLens-Windows-Portable-v1.0.0.zip`](https://github.com/JhonatanM2005/DroidLens/releases/download/v1.0.0/DroidLens-Windows-Portable-v1.0.0.zip)):**
    - No requiere instalación: descomprimir y ejecutar `DroidLens.exe`.
@@ -164,10 +165,11 @@ DroidLens ofrece dos opciones de distribución oficiales para Windows (descargab
 
 ## 🚀 Guía de Uso Paso a Paso
 
-### Paso 1: Instalar el Driver DirectShow en Windows (Solo una vez)
-1. Abre la carpeta `driver/` (o selecciona la opción en el instalador).
-2. Haz doble clic en `install_driver.bat` y pulsa **"Sí"** en el diálogo de administrador.
-3. El driver queda registrado en Windows con el nombre **"Unity Video Capture"**.
+### Paso 1: Instalar los Drivers de Cámara y Micrófono Virtual en Windows (Solo una vez)
+1. **Driver de Cámara Virtual (`Unity Video Capture`):**
+   - Abre la carpeta `driver/` (o marca la casilla en el instalador), haz doble clic en `install_driver.bat` y acepta los permisos de administrador.
+2. **Driver de Micrófono Virtual (`VB-Audio Virtual Cable` — requerido para usar el micrófono en Discord, Meet, Zoom o Teams):**
+   - Haz doble clic en `driver/install_vbcable.bat` (o pulsa el botón **"📥 Instalar Micrófono Virtual (VB-Cable)"** directamente dentro de la app DroidLens en PC) y haz clic en **"Install Driver"** en la ventana que se abre.
 
 ### Paso 2: Instalar la App en tu Celular Android
 1. Instala el APK [**`DroidLens.apk`**](file:///c:/Users/Usuario/Documents/AppCam/DroidLens.apk) directamente en tu teléfono:
@@ -175,15 +177,18 @@ DroidLens ofrece dos opciones de distribución oficiales para Windows (descargab
    adb install -r DroidLens.apk
    ```
 2. Conecta el cable USB y activa la **Depuración por USB** en *Opciones de desarrollador* de tu móvil.
-3. Abre DroidLens y concede el permiso de cámara.
+3. Abre DroidLens y concede los permisos de **Cámara** y **Micrófono**.
 
-### Paso 3: Iniciar DroidLens en la PC
+### Paso 3: Iniciar DroidLens en la PC y Configurar Discord / Meet / Zoom
 1. Conecta el celular por cable USB a la computadora.
 2. Abre `DroidLens.exe` (o ejecuta `run.bat` en desarrollo).
 3. En la ventana de DroidLens:
    - Si tienes varios teléfonos, elige tu celular en el menú desplegable.
+   - En **Salida de Audio / Micrófono**, verifica que esté seleccionado **`CABLE Input (VB-Audio Virtual Cable)`** (se autodetecta al tener VB-Cable instalado).
    - Activa el interruptor **"Cámara Virtual"**.
-   - En tu app de videollamadas (Google Meet, Zoom, Teams, Discord o navegador), selecciona **"Unity Video Capture"** como tu cámara.
+4. En tu app de videollamadas (**Discord**, Google Meet, Zoom, Microsoft Teams o navegador):
+   - **Cámara / Dispositivo de Video:** selecciona **`Unity Video Capture`**.
+   - **Micrófono / Dispositivo de Entrada:** selecciona **`CABLE Output (VB-Audio Virtual Cable)`**.
 
 ---
 
@@ -220,5 +225,6 @@ cd android
 | **"Buscando USB..."** | Cable no detectado o depuración inactiva. | Usa un cable de datos (no solo de carga) y confirma que la Depuración USB está encendida. |
 | **"Autorizar en Celular"** | Permiso RSA de depuración pendiente. | Desbloquea la pantalla del celular y pulsa "Permitir siempre desde esta computadora". |
 | **"Error al iniciar cámara virtual"** | Driver DirectShow no registrado. | Ejecuta `driver\install_driver.bat` como Administrador. |
+| **Discord / Meet no detecta el micrófono o me escucho en mis altavoces** | `VB-Audio Virtual Cable` no está instalado en Windows. | Pulsa **"📥 Instalar Micrófono Virtual (VB-Cable)"** en DroidLens (o ejecuta `driver\install_vbcable.bat`), elige `CABLE Input` en DroidLens y `CABLE Output` como micrófono en Discord. |
 | **Latencia > 100 ms** | Hub USB saturado o puerto USB 2.0 antiguo. | Conecta el celular a un puerto USB 3.0 directo de la placa base de la PC. |
 | **Desconexión rápida a standby** | Cable USB flojo o app Android cerrada. | Al reconectar el cable o abrir la app, la señal se recupera automáticamente sin reiniciar DroidLens en la PC. |

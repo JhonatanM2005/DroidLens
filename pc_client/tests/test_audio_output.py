@@ -18,6 +18,7 @@ def test_auto_detects_vb_cable_and_filters_inputs():
         mgr = AudioOutputManager()
         devices = mgr.list_output_devices()
         assert len(devices) == 2
+        assert mgr.has_virtual_cable() is True
         assert mgr.find_preferred_device() == "CABLE Input (VB-Audio Virtual Cable)"
 
 
@@ -28,6 +29,7 @@ def test_fallback_when_no_vb_cable_present():
     with patch("core.audio_output.sd") as mock_sd:
         mock_sd.query_devices.return_value = devices_no_cable
         mgr = AudioOutputManager()
+        assert mgr.has_virtual_cable() is False
         assert mgr.find_preferred_device() == "Speakers (Realtek Audio)"
 
 

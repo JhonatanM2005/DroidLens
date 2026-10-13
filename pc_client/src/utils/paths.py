@@ -62,3 +62,17 @@ def find_adb_binary() -> str:
         return local_sdk
 
     return ""
+
+
+def find_driver_script(script_name: str) -> str:
+    """Localiza un script dentro de driver/ tanto en modo portable/instalado como en desarrollo."""
+    candidates = [
+        os.path.join(os.path.dirname(sys.executable), "driver", script_name),
+        os.path.join(get_bundle_dir(), "driver", script_name),
+        os.path.abspath(os.path.join(get_bundle_dir(), "..", "driver", script_name)),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return ""
+

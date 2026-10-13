@@ -8,6 +8,7 @@ activar la cámara virtual, seleccionar dispositivos USB y monitorear métricas 
 
 import os
 import json
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -23,7 +24,7 @@ try:
     from core.virtual_camera import VirtualCameraManager
     from core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from adb.adb_manager import ADBManager
-    from utils.paths import get_settings_file, get_captures_dir, find_adb_binary
+    from utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script
 except ImportError:
     from ..core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from ..core.receiver import StreamReceiver, FrameStatus
@@ -31,7 +32,7 @@ except ImportError:
     from ..core.virtual_camera import VirtualCameraManager
     from ..core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from ..adb.adb_manager import ADBManager
-    from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary
+    from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary, find_driver_script
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -252,13 +253,24 @@ class DroidLensApp(ctk.CTk):
 
         self.audio_hint_label = ctk.CTkLabel(
             self.controls_frame,
-            text="💡 Usa 'CABLE Input' (VB-Cable) para que otras apps lo detecten como micrófono.",
+            text="",
             font=ctk.CTkFont(size=10),
             text_color="#888888",
             wraplength=280,
             justify="left",
         )
-        self.audio_hint_label.pack(pady=(0, 6), padx=12, anchor="w")
+        self.audio_hint_label.pack(pady=(0, 4), padx=12, anchor="w")
+
+        self.btn_install_vbcable = ctk.CTkButton(
+            self.controls_frame,
+            text="📥 Instalar Micrófono Virtual (VB-Cable)",
+            command=self._install_vbcable_async,
+            fg_color="#8A5A00",
+            hover_color="#A86E00",
+            height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self._update_audio_hint_ui()
 
         self._add_separator()
 
@@ -416,6 +428,66 @@ class DroidLensApp(ctk.CTk):
         self.settings["audio_output_device"] = device_name
         self._save_settings()
         self.audio_output.set_device(device_name)
+        self._update_audio_hint_ui()
+
+    def _update_audio_hint_ui(self):
+        has_cable = self.audio_output.has_virtual_cable()
+        selected_dev = self.audio_device_menu.get()
+        if has_cable:
+            self.btn_install_vbcable.pack_forget()
+            if "cable input" in selected_dev.lower():
+                self.audio_hint_label.configure(
+                    text="✓ Micrófono virtual activo. En Discord/Meet/Zoom elige 'CABLE Output' como micrófono.",
+                    text_color="#00E676",
+                )
+            else:
+                self.audio_hint_label.configure(
+                    text="💡 Selecciona 'CABLE Input' arriba para que Discord/Meet detecten tu micrófono.",
+                    text_color="#888888",
+                )
+        else:
+            self.audio_hint_label.configure(
+                text="⚠️ VB-Cable no detectado: el audio saldrá por tus altavoces. Instálalo para usarlo como micrófono en Discord/Meet.",
+                text_color="#FFBB33",
+            )
+            self.btn_install_vbcable.pack(fill="x", padx=12, pady=(2, 6), after=self.audio_hint_label)
+
+    def _install_vbcable_async(self):
+        self.btn_install_vbcable.configure(state="disabled", text="⏳ Instalando VB-Cable...")
+
+        def _task():
+            script_path = find_driver_script("install_vbcable.bat")
+            try:
+                if script_path:
+                    subprocess.run(["cmd.exe", "/c", script_path], check=False)
+                else:
+                    ps_cmd = (
+                        "$workDir = Join-Path $env:TEMP 'droidlens_vbcable'; "
+                        "$zipPath = Join-Path $workDir 'vbcable.zip'; "
+                        "New-Item -ItemType Directory -Path $workDir -Force | Out-Null; "
+                        "Invoke-WebRequest -Uri 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip' -OutFile $zipPath -UseBasicParsing; "
+                        "Expand-Archive -Path $zipPath -DestinationPath $workDir -Force; "
+                        "$exe = if ([Environment]::Is64BitOperatingSystem) { Join-Path $workDir 'VBCABLE_Setup_x64.exe' } else { Join-Path $workDir 'VBCABLE_Setup.exe' }; "
+                        "Start-Process -FilePath $exe -Verb RunAs -Wait"
+                    )
+                    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], check=False)
+            except Exception:
+                pass
+            self.audio_output.refresh_devices()
+            self.after(0, self._refresh_audio_ui_after_install)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _refresh_audio_ui_after_install(self):
+        self.btn_install_vbcable.configure(state="normal", text="📥 Instalar Micrófono Virtual (VB-Cable)")
+        options = self._build_audio_device_options()
+        self.audio_device_menu.configure(values=options)
+        preferred = self.audio_output.find_preferred_device() or SILENCED_DEVICE_LABEL
+        if self.audio_output.has_virtual_cable() and preferred in options:
+            self.audio_device_menu.set(preferred)
+            self._on_audio_device_selected(preferred)
+        else:
+            self._update_audio_hint_ui()
 
     def _add_separator(self):
         sep = ctk.CTkProgressBar(self.controls_frame, height=2)

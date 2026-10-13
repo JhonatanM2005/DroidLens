@@ -56,6 +56,29 @@ class AudioOutputManager:
             logger.warning(f"No se pudieron consultar dispositivos de audio: {e}")
             return []
 
+    def refresh_devices(self) -> List[Dict[str, Any]]:
+        """Reinicializa PortAudio para detectar dispositivos recién instalados (ej. VB-Cable) sin reiniciar la app."""
+        if sd is None:
+            return []
+        with self._lock:
+            was_active = self.is_active
+            prev_device = self.current_device_name
+            self._close_stream_unlocked()
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception as e:
+                logger.warning(f"No se pudo reinicializar PortAudio: {e}")
+        devices = self.list_output_devices()
+        if was_active:
+            target = self.find_preferred_device() if self.has_virtual_cable() else prev_device
+            self.start(target)
+        return devices
+
+    def has_virtual_cable(self) -> bool:
+        """Retorna True si se detecta un cable de audio virtual ('CABLE Input' / VB-Cable) instalado."""
+        return any("cable input" in dev["name"].lower() for dev in self.list_output_devices())
+
     def find_preferred_device(self) -> Optional[str]:
         """Prioriza 'CABLE Input' (VB-Audio Virtual Cable) si está disponible; si no, el primer dispositivo."""
         devices = self.list_output_devices()
