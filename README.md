@@ -24,20 +24,27 @@
 - **Recuperación Inmediata ante Desconexión (<250 ms):**
   - Contrato de recepción reactivo (`NEW_FRAME`, `STALE_CACHED`, `EXPIRED_OR_DISCONNECTED`).
   - Si el cable se desconecta o la señal se interrumpe por más de 250 ms, la aplicación cambia instantáneamente a la pantalla de standby animada sin congelar la imagen ni desconectar la videollamada.
-- **Protocolo APCM con Transporte de Cero Copias:**
-  - Cabecera binaria de 20 bytes enviada directamente al flujo de red antes del payload JPEG, eliminando copias intermedias de memoria.
+- **3 Modos de Transmisión Bidireccionales y Captura de Micrófono:**
+  - Conmutación en vivo desde el celular o desde la PC entre **`Cámara + Micrófono`**, **`Solo Cámara`** y **`Solo Micrófono`** sin reiniciar la conexión USB.
+  - Captura de audio de baja latencia (`AudioRecord` PCM 16-bit, 48 kHz, Mono, chunks de 20 ms) con `NoiseSuppressor` y `AcousticEchoCanceler` por hardware cuando el dispositivo lo soporta.
+  - En modo **`Solo Micrófono`**, el sensor de cámara en Android se pausa para ahorrar batería y temperatura, mientras la PC emite un lienzo optimizado de `"MODO SOLO MICRÓFONO"`.
+  - Enrutamiento de audio en Windows con autodetección de **`VB-Audio Virtual Cable`** (`CABLE Input`) para exponer el micrófono del celular en Zoom, Meet, Teams y Discord.
+- **Protocolo APCM v2 Multiplexado con Transporte de Cero Copias:**
+  - Cabecera binaria de 21 bytes (`Magic 'APCM'` + `PACKET_TYPE` + `SEQ_ID` + `TIMESTAMP_MS` + `PAYLOAD_LEN`) que multiplexa video JPEG (`0x01`), audio PCM (`0x02`) y comandos de control bidireccionales (`0x03`) sobre el mismo túnel TCP.
 - **Ciclo de Vida Persistente (ForegroundService):**
-  - Servicio en primer plano (`CamStreamService` como `LifecycleService`) propietario de CameraX y del servidor de streaming.
+  - Servicio en primer plano (`CamStreamService` como `LifecycleService` con tipos `camera|microphone`) propietario de CameraX, `AudioCaptureManager` y del servidor de streaming.
   - La captura continúa de forma ininterrumpida al minimizar la app, rotar la pantalla o bloquear el teléfono.
   - `WakeLock` parcial gestionado automáticamente y acción unificada "Detener" en app y notificación.
 - **App Android Nativa con Jetpack CameraX:**
   - **Perfiles Centralizados:** 1080p Full HD (30 FPS), 720p HD (30 FPS) y 480p Bajo Consumo (24 FPS).
   - Pausa total de análisis y compresión de imagen cuando no se transmite video, reduciendo el consumo y la temperatura.
+  - Botón rápido de modo de transmisión sincronizado en tiempo real con la PC.
   - Enfoque táctil (Tap-to-Focus) y zoom digital fluido (Pinch-to-Zoom).
   - Detección segura de linterna/flash físico mediante `hasFlashUnit()`.
   - **Modo Pantalla Oscura (AMOLED Power Save):** Apaga los píxeles de la pantalla con un toque para evitar el sobrecalentamiento.
 - **Cliente Moderno para Windows (CustomTkinter):**
   - Vista previa en vivo con escalado inteligente y bajo consumo de CPU.
+  - Selector de modo de transmisión (`Cámara + Micrófono`, `Solo Cámara`, `Solo Micrófono`) y selector de salida de audio (`VB-Cable` o altavoces).
   - Métricas precisas de FPS recibidos, FPS consumidos, bitrate (Kbps) y latencia USB en tiempo real filtrada contra desincronización de reloj.
   - Selección de resolución de salida Windows (DirectShow) con cambio no destructivo durante videollamadas.
   - Selector de rotación (0°, 90°, 180°, 270°) y modo espejo (flip horizontal).
@@ -74,29 +81,32 @@ DroidLens/
 │   ├── bin/adb/                 # Binarios portables de ADB (adb.exe y DLLs)
 │   ├── main.py                  # Punto de entrada de la aplicación
 │   ├── run.bat                  # Lanzador rápido con venv automático
-│   ├── tests/                   # Suite de 18 pruebas unitarias (pytest)
+│   ├── tests/                   # Suite de 26 pruebas unitarias (pytest)
 │   │   ├── test_adb.py          # Pruebas de ADB, aislamiento de serial y comandos
-│   │   ├── test_processor.py    # Pruebas de transformación de imagen y standby
-│   │   ├── test_protocol.py     # Pruebas de empaquetado y resincronización APCM
-│   │   └── test_receiver.py     # Pruebas de desconexión inmediata y frames caídos
+│   │   ├── test_audio_output.py # Pruebas de enrutamiento de audio y autodetección VB-Cable
+│   │   ├── test_processor.py    # Pruebas de transformación de imagen, standby y solo audio
+│   │   ├── test_protocol.py     # Pruebas de empaquetado y resincronización APCM v2
+│   │   └── test_receiver.py     # Pruebas de demultiplexación video/audio/control y desconexión
 │   └── src/
-│       ├── core/                # Receptor LIFO reactivo, protocolo y cámara virtual
+│       ├── core/                # Receptor demultiplexor, AudioOutputManager, protocolo APCM v2
 │       ├── ui/                  # Interfaz gráfica moderna (CustomTkinter)
 │       ├── adb/                 # Gestor multi-dispositivo y forward con serial
 │       └── utils/               # Gestor de rutas portables (paths.py)
 │
-├── android/                     # Aplicación móvil nativa en Kotlin (CameraX)
+├── android/                     # Aplicación móvil nativa en Kotlin (CameraX + AudioRecord)
 │   ├── gradlew / gradlew.bat    # Gradle Wrapper oficial reproducible (v8.13)
 │   ├── app/src/main/
-│   │   ├── AndroidManifest.xml  # Permisos de cámara, ForegroundService y backup
+│   │   ├── AndroidManifest.xml  # Permisos de cámara, micrófono y ForegroundService
 │   │   ├── java/com/droidlens/app/
-│   │   │   ├── MainActivity.kt  # UI móvil, controles táctiles y cliente de servicio
-│   │   │   ├── camera/          # VideoProfile, CameraManager, zoom y enfoque
-│   │   │   ├── network/         # StreamServer (127.0.0.1) y transporte cero copias
+│   │   │   ├── MainActivity.kt  # UI móvil, selector de modo y cliente de servicio
+│   │   │   ├── audio/           # AudioCaptureManager (PCM 48kHz + DSP hardware)
+│   │   │   ├── camera/          # VideoProfile, CameraManager, pausa de sensor, zoom y enfoque
+│   │   │   ├── model/           # StreamMode (CAMERA_AND_MIC, CAMERA_ONLY, MIC_ONLY)
+│   │   │   ├── network/         # StreamServer y PacketProtocol APCM v2 (21 bytes)
 │   │   │   ├── service/         # CamStreamService (LifecycleService con WakeLock)
 │   │   │   └── util/            # Conversión acelerada por hardware (libyuv)
 │   │   └── res/                 # Layouts y recursos visuales
-│   └── app/src/test/            # Tests unitarios JUnit para Android
+│   └── app/src/test/            # Tests unitarios JUnit para protocolo APCM v2
 │
 ├── scripts/                     # Herramientas de automatización y testing
 │   ├── build_windows_dist.py    # Pipeline de dos etapas: PyInstaller + Inno Setup
@@ -106,16 +116,16 @@ DroidLens/
 │   └── test_pipeline.py         # Test de integración E2E
 │
 ├── .github/workflows/ci.yml     # Pipeline de integración continua (CI) en GitHub Actions
-├── DroidLens.apk                # APK precompilado listo para instalar (6.70 MB)
+├── DroidLens.apk                # APK precompilado listo para instalar
 ├── run.bat                      # Iniciar DroidLens en PC con un solo clic
 └── README.md
 ```
 
 ---
 
-## 📡 Especificación del Protocolo APCM
+## 📡 Especificación del Protocolo APCM v2
 
-La comunicación entre el celular y la PC utiliza un socket TCP sobre el túnel ADB con una cabecera binaria fija de 20 bytes (Big-Endian):
+La comunicación entre el celular y la PC utiliza un socket TCP bidireccional sobre el túnel ADB con una cabecera binaria fija de **21 bytes** (Big-Endian):
 
 ```text
  0                   1                   2                   3
@@ -123,14 +133,16 @@ La comunicación entre el celular y la PC utiliza un socket TCP sobre el túnel 
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |       'A'     |       'P'     |       'C'     |       'M'     | -> Magic (4 bytes: 'APCM')
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                          FRAME_ID                             | -> uint32 (4 bytes)
+|  PACKET_TYPE  |                                               | -> uint8 (0x01=Video, 0x02=Audio, 0x03=Control)
++-+-+-+-+-+-+-+-+                    SEQ_ID                     +
+|                                               |               | -> uint32 (4 bytes)
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                                                               |
 |                        TIMESTAMP_MS                           | -> uint64 (8 bytes)
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                         PAYLOAD_LEN                           | -> uint32 (4 bytes)
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                        JPEG_PAYLOAD                           | -> N bytes
+|                           PAYLOAD                             | -> N bytes (JPEG / PCM 48kHz / StreamMode)
 |                            ...                                |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
