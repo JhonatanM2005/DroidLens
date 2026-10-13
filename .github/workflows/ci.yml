@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   windows-build:
-    name: Windows Tests, Portable ZIP & Installer
+    name: Windows C++ Driver, Tests, Portable ZIP & Installer
     runs-on: windows-latest
 
     steps:
@@ -32,6 +32,25 @@ jobs:
           echo "DROIDLENS_VERSION=$v" >> $env:GITHUB_ENV
           echo "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Resolved DroidLens version: $v"
+
+      - name: Configure MSVC x64 Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile Native Windows 11 IMFVirtualCamera Driver (DroidLensMF.dll)
+        run: |
+          cmd /c driver\mf_vcam\build_mf_driver.bat
+          if (-not (Test-Path "driver\DroidLensMF.dll")) {
+            Write-Error "DroidLensMF.dll was not generated!"
+            exit 1
+          }
+
+      - name: Upload Compiled DroidLensMF.dll Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DroidLensMF-Driver-DLL
+          path: driver/DroidLensMF.dll
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5

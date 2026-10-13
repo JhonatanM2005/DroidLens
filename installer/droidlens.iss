@@ -33,7 +33,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "installdriver"; Description: "Instalar driver de cámara virtual DirectShow (Recomendado)"; GroupDescription: "Componentes del sistema:"
+Name: "installdriver"; Description: "Instalar drivers de cámara virtual (Windows 11 Nativo + DirectShow)"; GroupDescription: "Componentes del sistema:"
 Name: "installvbcable"; Description: "Descargar e instalar driver de micrófono virtual VB-Cable (Para Discord, Meet, Zoom)"; GroupDescription: "Componentes del sistema:"
 
 [Files]
@@ -46,9 +46,9 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 ; Registrar driver como Administrador únicamente si el usuario marcó la tarea
-Filename: "{app}\driver\install_driver.bat"; Parameters: ""; StatusMsg: "Registrando filtro de cámara virtual UnityCapture..."; Flags: runascurrentuser shellexec waituntilterminated; Tasks: installdriver
+Filename: "{app}\driver\install_driver.bat"; Parameters: "--silent"; StatusMsg: "Registrando drivers de cámara virtual (Windows 11 + DirectShow)..."; Flags: runascurrentuser shellexec waituntilterminated; Tasks: installdriver
 Filename: "{app}\driver\install_vbcable.bat"; Parameters: ""; StatusMsg: "Instalando driver de micrófono virtual VB-Cable..."; Flags: runascurrentuser shellexec waituntilterminated; Tasks: installvbcable
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\driver\uninstall_driver.bat"; Parameters: ""; StatusMsg: "Desinstalando filtro de cámara virtual..."; Flags: runascurrentuser shellexec waituntilterminated; RunOnceId: "UninstallDroidLensDriver"
+Filename: "{app}\driver\uninstall_driver.bat"; Parameters: "--silent"; StatusMsg: "Desinstalando drivers de cámara virtual..."; Flags: runascurrentuser shellexec waituntilterminated; RunOnceId: "UninstallDroidLensDriver"
