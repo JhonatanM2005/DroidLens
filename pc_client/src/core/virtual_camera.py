@@ -73,12 +73,24 @@ class MFVirtualCamBridge:
 
                 dll.dl_mf_stop.argtypes = []
                 dll.dl_mf_stop.restype = None
+
+                if hasattr(dll, "dl_mf_get_last_hr"):
+                    dll.dl_mf_get_last_hr.argtypes = []
+                    dll.dl_mf_get_last_hr.restype = ctypes.c_int
             self._dll = dll
             return True
         except Exception as e:
             logger.error(f"Error cargando DroidLensMF.dll: {e}")
             self._dll = None
             return False
+
+    def get_last_hr(self) -> int:
+        if not self._load() or not hasattr(self._dll, "dl_mf_get_last_hr"):
+            return 0
+        try:
+            return int(self._dll.dl_mf_get_last_hr()) & 0xFFFFFFFF
+        except Exception:
+            return 0
 
     def is_supported(self) -> bool:
         if not self._load():

@@ -9,7 +9,7 @@ echo.
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Solicitando permisos de administrador...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%~1' -Verb RunAs -Wait"
     exit /b
 )
 
@@ -21,7 +21,15 @@ if exist "%~dp0UnityCaptureFilter64.dll" regsvr32.exe /s "%~dp0UnityCaptureFilte
 
 echo [2/2] Registrando driver nativo Windows 11 (DroidLensMF.dll)...
 if exist "%~dp0DroidLensMF.dll" (
-    regsvr32.exe /s "%~dp0DroidLensMF.dll"
+    if not exist "%ProgramData%\DroidLens" mkdir "%ProgramData%\DroidLens"
+    copy /Y "%~dp0DroidLensMF.dll" "%ProgramData%\DroidLens\DroidLensMF.dll" >nul 2>&1
+    icacls "%ProgramData%\DroidLens" /grant "*S-1-1-0:(OI)(CI)(RX)" "*S-1-5-19:(OI)(CI)(RX)" "*S-1-15-2-1:(OI)(CI)(RX)" >nul 2>&1
+    icacls "%~dp0" /grant "*S-1-1-0:(OI)(CI)(RX)" "*S-1-5-19:(OI)(CI)(RX)" "*S-1-15-2-1:(OI)(CI)(RX)" >nul 2>&1
+    if exist "%ProgramData%\DroidLens\DroidLensMF.dll" (
+        regsvr32.exe /s "%ProgramData%\DroidLens\DroidLensMF.dll"
+    ) else (
+        regsvr32.exe /s "%~dp0DroidLensMF.dll"
+    )
 )
 
 if %errorlevel% equ 0 (
@@ -36,7 +44,7 @@ if %errorlevel% equ 0 (
     echo [ERROR] Hubo un problema al registrar las DLL.
 )
 
-if "%1" neq "--silent" (
+if "%~1" neq "--silent" (
     echo.
     pause
 )

@@ -8,3 +8,4 @@ EXPORTS
     dl_mf_start
     dl_mf_send_frame
     dl_mf_stop
+    dl_mf_get_last_hr
