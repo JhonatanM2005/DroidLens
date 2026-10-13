@@ -31,7 +31,8 @@ a = Analysis(
         'PIL.ImageTk',
         'customtkinter',
         'pyvirtualcam',
-        'cv2'
+        'cv2',
+        'sounddevice'
     ],
     hookspath=[],
     hooksconfig={},
