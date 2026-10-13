@@ -149,3 +149,32 @@ class FrameProcessor:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (110, 110, 110), 1, cv2.LINE_AA)
 
         return frame
+
+    def generate_audio_only_frame(self, audio_active: bool = True) -> np.ndarray:
+        """Genera el lienzo activo para cuando la transmisión está en modo Solo Micrófono."""
+        self._standby_counter += 1
+        t = self._standby_counter * 0.08
+
+        width, height = self.target_width, self.target_height
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        frame[:] = (22, 26, 20)
+
+        cx, cy = width // 2, height // 2
+        pulse_radius = int(48 + 10 * math.sin(t))
+        color = (120, 220, 40) if audio_active else (140, 140, 140)
+
+        cv2.circle(frame, (cx, cy - 35), pulse_radius + 18, (40, 65, 35), 2)
+        cv2.circle(frame, (cx, cy - 35), pulse_radius, color, -1)
+        cv2.circle(frame, (cx, cy - 35), 16, (255, 255, 255), -1)
+
+        title = "MODO SOLO MICROFONO ACTIVO"
+        title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_DUPLEX, 0.85, 2)[0]
+        cv2.putText(frame, title, (cx - title_size[0] // 2, cy + 55),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.85, (240, 240, 240), 2, cv2.LINE_AA)
+
+        sub = "Sensor de camara apagado en el telefono para ahorrar bateria"
+        sub_size = cv2.getTextSize(sub, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)[0]
+        cv2.putText(frame, sub, (cx - sub_size[0] // 2, cy + 92),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 190, 160), 1, cv2.LINE_AA)
+
+        return frame

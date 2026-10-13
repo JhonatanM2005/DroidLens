@@ -55,3 +55,10 @@ def test_processor_diagnostic_overlay():
     assert out.shape == (720, 1280, 3)
     # Verificar que el overlay dibujó algo en la esquina superior izquierda
     assert np.any(out[12:100, 12:260] > 0)
+
+
+def test_processor_audio_only_frame():
+    processor = FrameProcessor(target_width=1280, target_height=720)
+    audio_frame = processor.generate_audio_only_frame()
+    assert audio_frame.shape == (720, 1280, 3)
+    assert np.any(audio_frame > 0)
