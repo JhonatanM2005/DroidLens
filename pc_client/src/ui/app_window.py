@@ -1,7 +1,8 @@
 """
 Interfaz gráfica de usuario de escritorio para DroidLens.
 Desarrollada con CustomTkinter para un diseño moderno y oscuro.
-Permite ver el preview en vivo, controlar la rotación, el modo espejo,
+Permite ver el preview en vivo, alternar entre modos (Cámara + Micrófono, Solo Cámara, Solo Micrófono),
+enrutar audio hacia dispositivos de salida / micrófono virtual (VB-Cable), controlar orientación,
 activar la cámara virtual, seleccionar dispositivos USB y monitorear métricas en tiempo real.
 """
 
@@ -16,15 +17,19 @@ import cv2
 from PIL import Image
 
 try:
+    from core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from core.receiver import StreamReceiver, FrameStatus
     from core.processor import FrameProcessor
     from core.virtual_camera import VirtualCameraManager
+    from core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from adb.adb_manager import ADBManager
     from utils.paths import get_settings_file, get_captures_dir, find_adb_binary
 except ImportError:
+    from ..core.protocol import StreamMode, STREAM_MODE_LABELS, LABEL_TO_STREAM_MODE
     from ..core.receiver import StreamReceiver, FrameStatus
     from ..core.processor import FrameProcessor
     from ..core.virtual_camera import VirtualCameraManager
+    from ..core.audio_output import AudioOutputManager, SILENCED_DEVICE_LABEL
     from ..adb.adb_manager import ADBManager
     from ..utils.paths import get_settings_file, get_captures_dir, find_adb_binary
 
@@ -37,21 +42,36 @@ OUTPUT_PRESETS = {
     "480p SD (854x480)": (854, 480, 24)
 }
 
+
 class DroidLensApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("DroidLens — Webcam USB para Windows")
-        self.geometry("1020x720")
-        self.minsize(860, 600)
+        self.title("DroidLens — Webcam y Micrófono USB para Windows")
+        self.geometry("1040x760")
+        self.minsize(880, 620)
 
         # Cargar configuración persistida
         self.settings = self._load_settings()
 
         # Componentes del núcleo
         adb_bin = find_adb_binary()
-        self.adb_manager = ADBManager(custom_adb_path=adb_bin or None, selected_serial=self.settings.get("last_serial"))
-        self.receiver = StreamReceiver(host="127.0.0.1", port=8080)
+        self.adb_manager = ADBManager(
+            custom_adb_path=adb_bin or None,
+            selected_serial=self.settings.get("last_serial"),
+        )
+        self.audio_output = AudioOutputManager()
+
+        saved_mode_label = self.settings.get("stream_mode", STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO])
+        initial_mode = LABEL_TO_STREAM_MODE.get(saved_mode_label, StreamMode.AUDIO_VIDEO)
+
+        self.receiver = StreamReceiver(
+            host="127.0.0.1",
+            port=8080,
+            on_audio_chunk=self.audio_output.write_chunk,
+            on_mode_changed=self._on_remote_mode_changed,
+        )
+        self.receiver.set_stream_mode(initial_mode, notify_remote=False)
 
         preset_name = self.settings.get("output_preset", "720p HD (1280x720)")
         initial_w, initial_h, initial_fps = OUTPUT_PRESETS.get(preset_name, (1280, 720, 30))
@@ -75,12 +95,19 @@ class DroidLensApp(ctk.CTk):
         # Configurar diseño de interfaz
         self._create_ui()
 
+        # Inicializar salida de audio según el modo actual
+        self._sync_audio_output_with_mode(initial_mode)
+
         # Iniciar receptor y bucles secundarios
         self.receiver.start()
-        self._video_thread = threading.Thread(target=self._video_loop, daemon=True, name="VirtualCamVideoThread")
+        self._video_thread = threading.Thread(
+            target=self._video_loop, daemon=True, name="VirtualCamVideoThread"
+        )
         self._video_thread.start()
 
-        self._usb_monitor_thread = threading.Thread(target=self._usb_monitor_loop, daemon=True, name="UsbMonitorThread")
+        self._usb_monitor_thread = threading.Thread(
+            target=self._usb_monitor_loop, daemon=True, name="UsbMonitorThread"
+        )
         self._usb_monitor_thread.start()
 
         # Iniciar refresco del preview en el hilo principal de la GUI
@@ -94,7 +121,9 @@ class DroidLensApp(ctk.CTk):
             "mirror": True,
             "output_preset": "720p HD (1280x720)",
             "overlay": False,
-            "last_serial": None
+            "last_serial": None,
+            "stream_mode": STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO],
+            "audio_output_device": None,
         }
         settings_file = get_settings_file()
         if os.path.exists(settings_file):
@@ -169,7 +198,7 @@ class DroidLensApp(ctk.CTk):
         # ==========================================
         # Panel Derecho: Controles y Ajustes
         # ==========================================
-        self.controls_frame = ctk.CTkScrollableFrame(self, corner_radius=10, width=310)
+        self.controls_frame = ctk.CTkScrollableFrame(self, corner_radius=10, width=320)
         self.controls_frame.grid(row=0, column=1, padx=(0, 16), pady=16, sticky="nsew")
 
         panel_title = ctk.CTkLabel(
@@ -178,6 +207,60 @@ class DroidLensApp(ctk.CTk):
             font=ctk.CTkFont(size=18, weight="bold")
         )
         panel_title.pack(pady=(12, 8), padx=12, anchor="w")
+
+        # Selector de Modo de Transmisión (Cámara + Micrófono / Solo Cámara / Solo Micrófono)
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Modo de Transmisión",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(4, 2), padx=12, anchor="w")
+
+        mode_values = [
+            STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO],
+            STREAM_MODE_LABELS[StreamMode.VIDEO_ONLY],
+            STREAM_MODE_LABELS[StreamMode.AUDIO_ONLY],
+        ]
+        self.mode_menu = ctk.CTkOptionMenu(
+            self.controls_frame,
+            values=mode_values,
+            command=self._on_mode_menu_selected,
+        )
+        self.mode_menu.set(STREAM_MODE_LABELS.get(self.receiver.stream_mode, mode_values[0]))
+        self.mode_menu.pack(fill="x", padx=12, pady=4)
+
+        # Selector de Dispositivo de Salida de Audio / Micrófono Virtual
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Salida de Audio / Micrófono",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(8, 2), padx=12, anchor="w")
+
+        audio_options = self._build_audio_device_options()
+        self.audio_device_menu = ctk.CTkOptionMenu(
+            self.controls_frame,
+            values=audio_options,
+            command=self._on_audio_device_selected,
+        )
+        saved_audio_dev = self.settings.get("audio_output_device")
+        preferred_audio_dev = (
+            saved_audio_dev
+            if saved_audio_dev in audio_options
+            else (self.audio_output.find_preferred_device() or SILENCED_DEVICE_LABEL)
+        )
+        self.audio_device_menu.set(preferred_audio_dev)
+        self.audio_device_menu.pack(fill="x", padx=12, pady=4)
+
+        self.audio_hint_label = ctk.CTkLabel(
+            self.controls_frame,
+            text="💡 Usa 'CABLE Input' (VB-Cable) para que otras apps lo detecten como micrófono.",
+            font=ctk.CTkFont(size=10),
+            text_color="#888888",
+            wraplength=280,
+            justify="left",
+        )
+        self.audio_hint_label.pack(pady=(0, 6), padx=12, anchor="w")
+
+        self._add_separator()
 
         # Switch de Cámara Virtual
         self.vcam_switch = ctk.CTkSwitch(
@@ -298,6 +381,42 @@ class DroidLensApp(ctk.CTk):
         )
         self.btn_reconnect_adb.pack(fill="x", padx=12, pady=(6, 12))
 
+    def _build_audio_device_options(self) -> List[str]:
+        devices = [d["name"] for d in self.audio_output.list_output_devices()]
+        devices.append(SILENCED_DEVICE_LABEL)
+        return devices
+
+    def _sync_audio_output_with_mode(self, mode: StreamMode):
+        if mode == StreamMode.VIDEO_ONLY:
+            self.audio_output.set_muted(True)
+        else:
+            self.audio_output.set_muted(False)
+            selected_dev = self.audio_device_menu.get()
+            if not self.audio_output.is_active and selected_dev != SILENCED_DEVICE_LABEL:
+                self.audio_output.start(selected_dev)
+
+    def _on_mode_menu_selected(self, label: str):
+        mode = LABEL_TO_STREAM_MODE.get(label, StreamMode.AUDIO_VIDEO)
+        self.settings["stream_mode"] = label
+        self._save_settings()
+        self.receiver.set_stream_mode(mode, notify_remote=True)
+        self._sync_audio_output_with_mode(mode)
+
+    def _on_remote_mode_changed(self, mode: StreamMode):
+        def _apply():
+            label = STREAM_MODE_LABELS.get(mode, STREAM_MODE_LABELS[StreamMode.AUDIO_VIDEO])
+            self.mode_menu.set(label)
+            self.settings["stream_mode"] = label
+            self._save_settings()
+            self._sync_audio_output_with_mode(mode)
+
+        self.after(0, _apply)
+
+    def _on_audio_device_selected(self, device_name: str):
+        self.settings["audio_output_device"] = device_name
+        self._save_settings()
+        self.audio_output.set_device(device_name)
+
     def _add_separator(self):
         sep = ctk.CTkProgressBar(self.controls_frame, height=2)
         sep.set(1.0)
@@ -306,7 +425,6 @@ class DroidLensApp(ctk.CTk):
     def _toggle_vcam(self):
         self.is_vcam_enabled = self.vcam_switch.get()
         if self.is_vcam_enabled:
-            # Aplicar resolución pendiente si existía antes de iniciar
             if self._pending_vcam_resolution:
                 pw, ph, pfps = self._pending_vcam_resolution
                 self.vcam.update_resolution(pw, ph, pfps)
@@ -343,7 +461,6 @@ class DroidLensApp(ctk.CTk):
             self._save_settings()
 
             if self.is_vcam_enabled and self.vcam.is_active:
-                # Bloque 4: No cortar videollamadas activas; guardar como pendiente
                 self._pending_vcam_resolution = (w, h, fps)
                 self.vcam_status_note.configure(
                     text="⚠️ Salida cambiará al reiniciar la Cámara Virtual.",
@@ -453,7 +570,6 @@ class DroidLensApp(ctk.CTk):
             selected_name = display_names[0]
             first_serial = self._device_map[selected_name]
             self.adb_manager.set_selected_serial(first_serial)
-            # Solo forward si el estado es 'device'
             threading.Thread(target=lambda: self.adb_manager.setup_port_forward(8080, 8080, serial=first_serial), daemon=True).start()
 
         self.device_menu.configure(values=display_names)
@@ -493,8 +609,10 @@ class DroidLensApp(ctk.CTk):
                 self._is_in_standby = False
                 self._latest_frame_id = result.meta.get("frame_id", self._latest_frame_id + 1)
                 processed = self.processor.process_frame(result.frame, meta=result.meta)
+            elif result.status == FrameStatus.AUDIO_ONLY_MODE:
+                self._is_in_standby = True
+                processed = self.processor.generate_audio_only_frame(audio_active=self.audio_output.is_active)
             else:
-                # Bloque 1: Expired o desconectado -> pasar a standby animado inmediatamente
                 self._is_in_standby = True
                 msg = "Esperando stream del celular..." if self.receiver.connected else "Esperando conexion USB..."
                 processed = self.processor.generate_standby_frame(msg)
@@ -515,7 +633,6 @@ class DroidLensApp(ctk.CTk):
             return
 
         frame = self._latest_display_frame
-        # En standby repintar siempre para animar el círculo; en stream pintar solo en frame nuevo
         should_render = self._is_in_standby or (self._latest_frame_id != self._last_rendered_id)
 
         if frame is not None and should_render:
@@ -551,8 +668,10 @@ class DroidLensApp(ctk.CTk):
         except Exception:
             pass
         self.receiver.stop()
+        self.audio_output.stop()
         self.vcam.stop()
         self.destroy()
+
 
 if __name__ == "__main__":
     app = DroidLensApp()
