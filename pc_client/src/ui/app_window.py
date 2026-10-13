@@ -162,6 +162,7 @@ class DroidLensApp(ctk.CTk):
             "audio_output_device": None,
             "close_to_tray": True,
             "vcam_backend": VCAM_BACKEND_LABELS[VirtualCamBackend.WINDOWS_MF],
+            "last_wireless_addr": "",
         }
         settings_file = get_settings_file()
         if os.path.exists(settings_file):
@@ -433,8 +434,12 @@ class DroidLensApp(ctk.CTk):
 
         self._add_separator()
 
-        # Selector de Dispositivos USB
-        ctk.CTkLabel(self.controls_frame, text="Dispositivo Android (USB)", font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(6, 2), padx=12, anchor="w")
+        # Selector de Dispositivos Android (USB o Depuración Inalámbrica)
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Dispositivo Android (USB / Wi-Fi)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(6, 2), padx=12, anchor="w")
 
         self.device_menu = ctk.CTkOptionMenu(
             self.controls_frame,
@@ -445,21 +450,102 @@ class DroidLensApp(ctk.CTk):
 
         self.device_info_label = ctk.CTkLabel(
             self.controls_frame,
-            text="Enchufa el celular por USB con Depuración activa.",
-            font=ctk.CTkFont(size=11),
+            text=(
+                "Enchufa por USB con Depuración activa.\n"
+                "💡 En Honor/Huawei: activa 'Transferencia de archivos (MTP)' y "
+                "'Permitir ADB en modo solo carga', o usa Depuración Inalámbrica:"
+            ),
+            font=ctk.CTkFont(size=10),
             text_color="#AAAAAA",
+            wraplength=280,
             justify="left"
         )
         self.device_info_label.pack(pady=4, padx=12, anchor="w")
 
         self.btn_reconnect_adb = ctk.CTkButton(
             self.controls_frame,
-            text="Reescanear USB",
+            text="🔄 Reescanear USB",
             command=self._reconnect_usb_async,
             fg_color="#1E3A5F",
-            hover_color="#2B4C7E"
+            hover_color="#2B4C7E",
+            height=28,
         )
-        self.btn_reconnect_adb.pack(fill="x", padx=12, pady=(6, 8))
+        self.btn_reconnect_adb.pack(fill="x", padx=12, pady=(4, 8))
+
+        # Depuración Inalámbrica (Android 11+ / Honor / Huawei)
+        ctk.CTkLabel(
+            self.controls_frame,
+            text="Depuración Inalámbrica (ADB Wi-Fi)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(pady=(4, 2), padx=12, anchor="w")
+
+        self.wireless_addr_entry = ctk.CTkEntry(
+            self.controls_frame,
+            placeholder_text="IP:Puerto (ej. 192.168.1.40:41555)",
+        )
+        saved_wireless = self.settings.get("last_wireless_addr", "")
+        if saved_wireless:
+            self.wireless_addr_entry.insert(0, saved_wireless)
+        self.wireless_addr_entry.pack(fill="x", padx=12, pady=(2, 4))
+
+        self.btn_wireless_connect = ctk.CTkButton(
+            self.controls_frame,
+            text="📡 Conectar Inalámbrico",
+            command=self._connect_wireless_async,
+            fg_color="#00695C",
+            hover_color="#00897B",
+            height=28,
+        )
+        self.btn_wireless_connect.pack(fill="x", padx=12, pady=(2, 4))
+
+        self.btn_toggle_pair = ctk.CTkButton(
+            self.controls_frame,
+            text="🔐 Emparejar con código (1ra vez)",
+            command=self._toggle_pair_box,
+            fg_color="#2A2D32",
+            hover_color="#3A3D42",
+            height=26,
+            font=ctk.CTkFont(size=11),
+        )
+        self.btn_toggle_pair.pack(fill="x", padx=12, pady=(2, 4))
+
+        self.pair_frame = ctk.CTkFrame(self.controls_frame, fg_color="#181A1F", corner_radius=6)
+        self._pair_box_visible = False
+
+        self.pair_addr_entry = ctk.CTkEntry(
+            self.pair_frame,
+            placeholder_text="IP:Puerto de emparejamiento",
+            height=26,
+        )
+        self.pair_addr_entry.pack(fill="x", padx=8, pady=(6, 3))
+
+        self.pair_code_entry = ctk.CTkEntry(
+            self.pair_frame,
+            placeholder_text="Código Wi-Fi de 6 dígitos",
+            height=26,
+        )
+        self.pair_code_entry.pack(fill="x", padx=8, pady=3)
+
+        self.btn_pair_confirm = ctk.CTkButton(
+            self.pair_frame,
+            text="✓ Vincular Dispositivo",
+            command=self._pair_wireless_async,
+            fg_color="#8A5A00",
+            hover_color="#A86E00",
+            height=26,
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.btn_pair_confirm.pack(fill="x", padx=8, pady=(3, 6))
+
+        self.wireless_status_label = ctk.CTkLabel(
+            self.controls_frame,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color="#888888",
+            wraplength=280,
+            justify="left",
+        )
+        self.wireless_status_label.pack(pady=(0, 4), padx=12, anchor="w")
 
         self._add_separator()
 
@@ -750,10 +836,64 @@ class DroidLensApp(ctk.CTk):
 
     def _reconnect_usb_async(self):
         def _task():
+            self.adb_manager.ensure_usb_vendor_ids()
             self.adb_manager.restart_server()
             time.sleep(0.5)
             serial = self.adb_manager.selected_serial
             self.adb_manager.setup_port_forward(8080, 8080, serial=serial)
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _toggle_pair_box(self):
+        self._pair_box_visible = not self._pair_box_visible
+        if self._pair_box_visible:
+            self.pair_frame.pack(fill="x", padx=12, pady=(2, 6), after=self.btn_toggle_pair)
+            self.btn_toggle_pair.configure(text="🔼 Ocultar emparejamiento")
+        else:
+            self.pair_frame.pack_forget()
+            self.btn_toggle_pair.configure(text="🔐 Emparejar con código (1ra vez)")
+
+    def _pair_wireless_async(self):
+        pair_addr = self.pair_addr_entry.get().strip()
+        pair_code = self.pair_code_entry.get().strip()
+        self.btn_pair_confirm.configure(state="disabled", text="⏳ Emparejando...")
+
+        def _task():
+            ok, msg = self.adb_manager.pair_wireless(pair_addr, pair_code)
+            def _done():
+                self.btn_pair_confirm.configure(state="normal", text="✓ Vincular Dispositivo")
+                self.wireless_status_label.configure(
+                    text=msg,
+                    text_color="#00E676" if ok else "#FF5252",
+                )
+                if ok and ":" in pair_addr and not self.wireless_addr_entry.get().strip():
+                    ip_only = pair_addr.split(":")[0]
+                    self.wireless_addr_entry.insert(0, f"{ip_only}:")
+            self.after(0, _done)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _connect_wireless_async(self):
+        addr = self.wireless_addr_entry.get().strip()
+        self.btn_wireless_connect.configure(state="disabled", text="⏳ Conectando...")
+
+        def _task():
+            ok, msg = self.adb_manager.connect_wireless(addr)
+            if ok:
+                self.settings["last_wireless_addr"] = addr
+                self.settings["last_serial"] = addr
+                self._save_settings()
+                self.adb_manager.setup_port_forward(8080, 8080, serial=addr, check_state=False)
+                devices = self.adb_manager.list_devices()
+                self.after(0, self._update_devices_ui, devices)
+
+            def _done():
+                self.btn_wireless_connect.configure(state="normal", text="📡 Conectar Inalámbrico")
+                self.wireless_status_label.configure(
+                    text=msg,
+                    text_color="#00E676" if ok else "#FF5252",
+                )
+            self.after(0, _done)
+
         threading.Thread(target=_task, daemon=True).start()
 
     def _usb_monitor_loop(self):
@@ -770,9 +910,13 @@ class DroidLensApp(ctk.CTk):
         if not devices:
             self.device_menu.configure(values=["Ningún celular detectado"])
             self.device_menu.set("Ningún celular detectado")
-            self.status_badge.configure(text="Buscando USB...", fg_color="#333333")
+            self.status_badge.configure(text="Buscando USB / Wi-Fi...", fg_color="#333333")
             self.device_info_label.configure(
-                text="Desconectado\nEnchufa el celular por USB con Depuración activa.",
+                text=(
+                    "Desconectado.\n"
+                    "💡 En Honor/Huawei: activa 'Transferencia de archivos (MTP)' y "
+                    "'Permitir ADB en modo solo carga', o usa Depuración Inalámbrica:"
+                ),
                 text_color="#AAAAAA"
             )
             return
@@ -785,7 +929,8 @@ class DroidLensApp(ctk.CTk):
             serial = d["serial"]
             model = d["model"]
             state = d["state"]
-            name = f"{model} ({serial[-4:]})"
+            tag = "Wi-Fi" if ":" in serial else serial[-4:]
+            name = f"{model} ({tag})"
             if state != "device":
                 name += f" [{state.upper()}]"
             self._device_map[name] = serial
@@ -805,22 +950,25 @@ class DroidLensApp(ctk.CTk):
             self.device_menu.set(selected_name)
 
         active_dev = next((d for d in devices if d["serial"] == self.adb_manager.selected_serial), devices[0])
+        is_wireless = ":" in active_dev["serial"]
         if active_dev["state"] == "device":
-            self.status_badge.configure(text="USB Conectado", fg_color="#007E33")
+            badge_txt = "ADB Inalámbrico" if is_wireless else "USB Conectado"
+            link_txt = f"Wi-Fi ({active_dev['serial']})" if is_wireless else "Túnel USB tcp:8080"
+            self.status_badge.configure(text=badge_txt, fg_color="#007E33")
             self.device_info_label.configure(
-                text=f"Modelo: {active_dev['model']}\nEstado: Listo (Túnel USB tcp:8080)",
+                text=f"Modelo: {active_dev['model']}\nEstado: Listo ({link_txt})",
                 text_color="#00E676"
             )
         elif active_dev["state"] == "unauthorized":
             self.status_badge.configure(text="Autorizar en Celular", fg_color="#FF8800")
             self.device_info_label.configure(
-                text="Acepta el diálogo de 'Permitir depuración por USB'\nen la pantalla de tu celular.",
+                text="Acepta el diálogo de 'Permitir depuración'\nen la pantalla de tu celular.",
                 text_color="#FFBB33"
             )
         else:
             self.status_badge.configure(text="Dispositivo Offline", fg_color="#555555")
             self.device_info_label.configure(
-                text=f"Estado: {active_dev['state']}\nReconecta el cable USB.",
+                text=f"Estado: {active_dev['state']}\nReconecta el cable USB o vuelve a conectar por Wi-Fi.",
                 text_color="#AAAAAA"
             )
 

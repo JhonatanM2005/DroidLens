@@ -82,3 +82,35 @@ def test_diagnostics_unauthorized():
         diag = mgr.get_diagnostics()
         assert diag["status"] == "unauthorized"
         assert "no autorizado" in diag["message"]
+
+
+def test_pair_and_connect_wireless_are_global_commands_and_parse_output():
+    mgr = ADBManager(selected_serial="8118e8de0410")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "Successfully paired to 192.168.1.45:39123 [guid=adb-xxx]"
+        mock_run.return_value.stderr = ""
+
+        ok, msg = mgr.pair_wireless("192.168.1.45:39123", "123456")
+        assert ok is True
+        called_args = mock_run.call_args[0][0]
+        assert "-s" not in called_args
+        assert called_args[1:] == ["pair", "192.168.1.45:39123", "123456"]
+
+        mock_run.return_value.stdout = "connected to 192.168.1.45:41555"
+        ok_conn, msg_conn = mgr.connect_wireless("192.168.1.45:41555")
+        assert ok_conn is True
+        called_conn_args = mock_run.call_args[0][0]
+        assert "-s" not in called_conn_args
+        assert called_conn_args[1:] == ["connect", "192.168.1.45:41555"]
+
+
+def test_ensure_vendor_ids_writes_honor_and_huawei_ids(tmp_path):
+    ini_file = tmp_path / ".android" / "adb_usb.ini"
+    ADBManager.ensure_usb_vendor_ids(str(ini_file))
+    assert ini_file.exists()
+    content = ini_file.read_text(encoding="utf-8")
+    assert "0x34A7" in content  # Honor
+    assert "0x12D1" in content  # Huawei
+

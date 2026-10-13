@@ -17,17 +17,47 @@ from typing import List, Dict, Optional, Tuple, Any
 logger = logging.getLogger("DroidLens.ADB")
 
 # Comandos globales de ADB que nunca deben heredar el flag -s <serial>
-GLOBAL_COMMANDS = {"devices", "version", "start-server", "kill-server"}
+GLOBAL_COMMANDS = {"devices", "version", "start-server", "kill-server", "pair", "connect", "disconnect"}
+
+# Vendor IDs USB adicionales (Honor=0x34A7, Huawei=0x12D1, Xiaomi=0x2717, Oppo/Realme=0x22D9)
+KNOWN_USB_VENDOR_IDS = ("0x34A7", "0x12D1", "0x2717", "0x22D9")
+
 
 class ADBManager:
     def __init__(self, custom_adb_path: Optional[str] = None, selected_serial: Optional[str] = None):
         self.adb_path = custom_adb_path or self._find_adb()
         self.selected_serial: Optional[str] = selected_serial
+        self.ensure_usb_vendor_ids()
 
         if not self.adb_path:
             logger.warning("No se encontro un ejecutable de ADB. El modo USB automatico requerira ADB en el PATH.")
         else:
             logger.info(f"ADB localizado en: {self.adb_path}")
+
+    @staticmethod
+    def ensure_usb_vendor_ids(ini_path: Optional[str] = None) -> None:
+        """
+        Registra los Vendor IDs de Honor (0x34A7) y Huawei (0x12D1) en ~/.android/adb_usb.ini
+        para evitar que el demonio ADB en Windows ignore el cable USB en dispositivos MagicOS/EMUI.
+        """
+        try:
+            target_ini = ini_path or os.path.join(os.path.expanduser("~"), ".android", "adb_usb.ini")
+            os.makedirs(os.path.dirname(target_ini), exist_ok=True)
+            existing = ""
+            if os.path.exists(target_ini):
+                with open(target_ini, "r", encoding="utf-8", errors="ignore") as f:
+                    existing = f.read()
+
+            existing_upper = {line.strip().upper() for line in existing.splitlines() if line.strip()}
+            missing = [vid for vid in KNOWN_USB_VENDOR_IDS if vid.upper() not in existing_upper]
+            if missing:
+                with open(target_ini, "a", encoding="utf-8") as f:
+                    if existing and not existing.endswith("\n"):
+                        f.write("\n")
+                    for vid in missing:
+                        f.write(f"{vid}\n")
+        except Exception as e:
+            logger.debug(f"No se pudo actualizar adb_usb.ini: {e}")
 
     @staticmethod
     def _find_adb() -> Optional[str]:
@@ -159,6 +189,41 @@ class ADBManager:
         target = serial if serial is not None else self.selected_serial
         code, _, _ = self._run_command(["forward", "--remove", f"tcp:{local_port}"], serial=target)
         return code == 0
+
+    def pair_wireless(self, host_port: str, pairing_code: str) -> Tuple[bool, str]:
+        """
+        Empareja un dispositivo mediante Depuración Inalámbrica (Android 11+):
+        'adb pair <IP:Puerto> <Código>'
+        """
+        hp = host_port.strip()
+        code_str = pairing_code.strip()
+        if not hp or not code_str:
+            return False, "Ingresa IP:Puerto de emparejamiento y el código de 6 dígitos."
+
+        rc, out, err = self._run_command(["pair", hp, code_str], timeout=10.0)
+        combined = f"{out} {err}".strip()
+        if rc == 0 and ("successfully paired" in combined.lower() or "paired to" in combined.lower()):
+            logger.info(f"Emparejamiento inalámbrico exitoso con {hp}")
+            return True, f"✓ Emparejado con {hp}"
+        return False, combined or "No se pudo emparejar con el dispositivo."
+
+    def connect_wireless(self, host_port: str) -> Tuple[bool, str]:
+        """
+        Conecta por Depuración Inalámbrica (ADB sobre Wi-Fi):
+        'adb connect <IP:Puerto>'
+        """
+        hp = host_port.strip()
+        if not hp:
+            return False, "Ingresa la dirección IP:Puerto mostrada en Depuración Inalámbrica."
+
+        rc, out, err = self._run_command(["connect", hp], timeout=10.0)
+        combined = f"{out} {err}".strip()
+        low = combined.lower()
+        if rc == 0 and ("connected to" in low or "already connected" in low) and "cannot connect" not in low and "failed to connect" not in low:
+            self.selected_serial = hp
+            logger.info(f"Conectado por ADB inalámbrico a {hp}")
+            return True, f"✓ Conectado a {hp}"
+        return False, combined or f"No se pudo conectar a {hp}"
 
     def restart_server(self) -> bool:
         """Reinicia el demonio local de ADB para forzar un reescaneo de todos los buses USB."""
